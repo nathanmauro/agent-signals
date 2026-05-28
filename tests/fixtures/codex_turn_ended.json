@@ -1,0 +1,6 @@
+{
+  "type": "agent-turn-complete",
+  "session_id": "sess_xyz789",
+  "turn_id": "turn_042",
+  "session_path": "/Users/nathan/.codex/sessions/sess_xyz789/transcript.jsonl"
+}

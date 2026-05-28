@@ -1,0 +1,1 @@
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I've updated the configuration. The server should restart cleanly now."}]}}

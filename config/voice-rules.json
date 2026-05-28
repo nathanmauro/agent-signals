@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "defaults": {
+    "voice": "af_bella",
+    "speed": "1.0",
+    "lang": "en-us",
+    "max_chars": 650
+  },
+  "rules": [
+    {
+      "name": "needs_attention",
+      "patterns": [
+        "(?i)\\b(blocked|failed|failure|error|traceback|exception|permission denied|unable to|could not|can't)\\b"
+      ],
+      "voice": "af_bella",
+      "speed": "0.9",
+      "max_chars": 520,
+      "prefix": "Needs attention. "
+    },
+    {
+      "name": "needs_input",
+      "patterns": [
+        "\\?\\s*$",
+        "(?i)\\b(please confirm|which one|choose|send me|tell me|do you want)\\b"
+      ],
+      "voice": "af_bella",
+      "speed": "0.95",
+      "max_chars": 520,
+      "prefix": "Your input is needed. "
+    },
+    {
+      "name": "code_or_patch",
+      "patterns": [
+        "```",
+        "(?m)^diff --git ",
+        "(?m)^\\s*(def|class|function|const|let|import|from)\\s+"
+      ],
+      "voice": "af_bella",
+      "speed": "0.88",
+      "max_chars": 380,
+      "prefix": "Code is on screen. "
+    },
+    {
+      "name": "verified_change",
+      "patterns": [
+        "(?i)\\b(done|implemented|fixed|updated|wired|verified|tests? passed|smoke-tested)\\b"
+      ],
+      "voice": "af_bella",
+      "speed": "1.06",
+      "max_chars": 440
+    },
+    {
+      "name": "research_or_review",
+      "patterns": [
+        "(?i)\\b(findings|review|summary|sources?|citations?|recommendation|tradeoff)\\b"
+      ],
+      "voice": "af_bella",
+      "speed": "0.98",
+      "max_chars": 650
+    }
+  ]
+}

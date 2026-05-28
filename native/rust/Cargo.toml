@@ -1,0 +1,24 @@
+[package]
+name = "agent-signals-native"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+ctrlc = "3.4"
+regex = "1.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+wait-timeout = "0.2"
+
+[dev-dependencies]
+tempfile = "3.14"
+
+[[bin]]
+name = "agent-signal"
+path = "src/bin/agent-signal.rs"
+
+[[bin]]
+name = "agent-signald"
+path = "src/bin/agent-signald.rs"

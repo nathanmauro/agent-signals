@@ -1,0 +1,20 @@
+# Rust
+/native/rust/target/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Swift build output
+/native/swift/build/
+
+# IDE
+.idea/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log

@@ -1,0 +1,20 @@
+[
+  {
+    "id": 12,
+    "title": "agent-signals",
+    "tab_name": "dev",
+    "tab_id": 3,
+    "tab_position": 2,
+    "pane_cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "pane_command": "claude"
+  },
+  {
+    "id": 13,
+    "title": "logs",
+    "tab_name": "dev",
+    "tab_id": 3,
+    "tab_position": 2,
+    "pane_cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "pane_command": "tail"
+  }
+]

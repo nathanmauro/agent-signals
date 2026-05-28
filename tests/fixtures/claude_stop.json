@@ -1,0 +1,8 @@
+{
+  "type": "Stop",
+  "hook_event_name": "Stop",
+  "transcript_path": "/Users/nathan/.claude/projects/-Users-nathan-Developer-proj-test/abc123.jsonl",
+  "cwd": "/Users/nathan/Developer/proj/test",
+  "thread-id": "thread_abc123",
+  "turn-id": "turn_001"
+}

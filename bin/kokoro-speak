@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Low-level Kokoro TTS — kept as standalone for direct use.
+# agent-signal speak-last handles the full pipeline.
+ROOT="${KOKORO_TTS_ROOT:-$HOME/.local/share/kokoro-tts}"
+PYTHON="$ROOT/.venv/bin/python"
+
+if [[ $# -gt 0 ]]; then
+  TEXT="$*"
+else
+  TEXT="$(cat)"
+fi
+
+if [[ -z "${TEXT//[[:space:]]/}" ]]; then
+  echo "usage: kokoro-speak <text>" >&2
+  echo "   or: echo <text> | kokoro-speak" >&2
+  exit 2
+fi
+
+OUT="${KOKORO_TTS_OUT:-$TMPDIR/kokoro-speak.wav}"
+VOICE="${KOKORO_TTS_VOICE:-af_bella}"
+SPEED="${KOKORO_TTS_SPEED:-1.0}"
+LANG="${KOKORO_TTS_LANG:-en-us}"
+
+"$PYTHON" - "$ROOT" "$OUT" "$VOICE" "$SPEED" "$LANG" "$TEXT" <<'PY'
+import sys
+
+import soundfile as sf
+from kokoro_onnx import Kokoro
+
+root, out, voice, speed, lang, text = sys.argv[1:]
+kokoro = Kokoro(f"{root}/kokoro-v1.0.onnx", f"{root}/voices-v1.0.bin")
+samples, sample_rate = kokoro.create(text, voice=voice, speed=float(speed), lang=lang)
+sf.write(out, samples, sample_rate)
+PY
+
+afplay "$OUT"

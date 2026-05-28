@@ -1,0 +1,2 @@
+{"type":"human","message":{"content":[{"type":"text","text":"Fix the bug in main.py"}]}}
+{"type":"assistant","uuid":"resp_001","message":{"content":[{"type":"text","text":"I found and fixed the bug. The issue was a missing null check on line 42."}]}}
