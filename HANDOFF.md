@@ -21,6 +21,7 @@ hook → agent-signal (Rust client)
           │  on click → daemon → focus_context → activate Ghostty + zellij/tmux pane focus
 ```
 
+- The notifier runs an **AppKit `.accessory` event loop** (`NSApplication`, no Dock icon, paired with `LSUIElement`) rather than a bare Foundation `RunLoop`. This is required: macOS activates the posting app on notification click, and only a real Cocoa event loop can answer that activation and deliver the `UNUserNotificationCenterDelegate` callback in-process. With a bare RunLoop, clicks produced "AgentSignalsNotifier.app is not responding" and the click→focus path never fired (fixed 2026-05-29).
 - `speak-last` and `voice` shell out to the Python package (`python -m agent_signals.cli`). Everything else is native.
 - Native notifications replaced `terminal-notifier` — this killed the `-sender`/`-execute`/`-ignoreDnD` conflicts and the per-notification process pile-up. `error` severity → `.timeSensitive` (DND override); `needs_input` and `normal` are routine.
 - Resilience: daemon down → client spools + plays local cues itself. Notifier down → daemon spools, drains on reconnect.
@@ -35,21 +36,23 @@ hook → agent-signal (Rust client)
 - `scripts/install-native.sh` — build + install (bins, wrappers, app, plists) + load + doctor. `scripts/uninstall-native.sh` — unload + remove.
 - `README.md` — install / usage / troubleshooting.
 
-## Current status (2026-05-28)
+## Current status (2026-05-29)
 
-The native rewrite is **code-complete**. Daemon + client + notifier all built; Rust + Python suites green.
+The native rewrite is **deployed and live** on `in8-mac`. Daemon + client + notifier all built and installed; Rust + Python suites green; repo public and pushed.
 
 - ✅ State growth is bounded on every path: dedup is age-GC'd **and** count-capped (`MAX_DEDUP_FILES`), contexts GC'd by 24h TTL + active-index cap 32, spool capped at 128. The sweep is **periodic** — it runs every 6h on a dedicated thread, not just at startup.
-- ✅ `doctor` reports a remediation hint when notification auth is denied.
+- ✅ `doctor` reports a remediation hint when notification auth is denied; on `in8-mac` it currently reports `authorized` + `notifier connected: true`.
 - ✅ README, `scripts/uninstall-native.sh`, and the `install-native.sh` bin/ wrapper install are all in place.
+- ✅ **Notification clicks work** (fixed 2026-05-29). The notifier was a bare Foundation `RunLoop` that could not answer the click-activation Apple Event, so every click produced "AgentSignalsNotifier.app is not responding" and LaunchServices spawned a dead duplicate instance. Switched to an AppKit `.accessory` event loop. This is what makes the click→focus path (the headline feature) actually fire — it had never worked on a real click before this.
 
 ## Plan / open items
 
-These remaining items are **system/user actions**, not code work.
+The original three open items are **done**: notification auth is `authorized`, install + Stop/Notification hooks are wired in `~/.claude/settings.json`, and the repo is public + pushed.
 
-1. **Grant notification authorization (the one manual last-mile).** macOS suppresses the visible banner until the user allows "AgentSignalsNotifier" in **System Settings → Notifications** (`agent-signal doctor` prints the remediation hint). If the prompt never appeared: `tccutil reset Notifications` + relaunch the app. The pipeline already completes ("posted") and bell + sound fire regardless. Confirm with `agent-signal doctor` → `authorized`.
-2. **Live install + hook wiring on a given machine.** Run `scripts/install-native.sh`, then add the Stop and Notification hooks to `~/.claude/settings.json` pointing at `agent-response-notify`.
-3. **Git remote + push (in progress).** Repo is local-only as of this commit; decide public vs private, then `gh repo create` + push.
+Remaining:
+
+1. **Verify click→focus end-to-end.** Now that clicks deliver (post-AppKit fix), confirm a real banner click activates the originating Ghostty + zellij/tmux pane via `focus_context`. This path was unreachable before 2026-05-29, so it has effectively never been exercised on a live click.
+2. **Persistent banners (user action).** Banner-vs-Alert is a System Settings choice, not code: **System Settings → Notifications → Agent Signals Notifier → "Alerts"** to make banners stay until dismissed. Code cannot force it — `.timeSensitive` only overrides DND, and `.critical` needs an Apple entitlement an ad-hoc local build can't have.
 
 ## Commands
 
