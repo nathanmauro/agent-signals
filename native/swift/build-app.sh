@@ -12,6 +12,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 swiftc \
   "$src_dir/main.swift" \
   -O \
+  -framework AppKit \
   -framework Foundation \
   -framework UserNotifications \
   -o "$app/Contents/MacOS/AgentSignalsNotifier"

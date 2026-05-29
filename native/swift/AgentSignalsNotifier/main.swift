@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import UserNotifications
 import Darwin
@@ -267,5 +268,20 @@ func start() {
     }
 }
 
-start()
-RunLoop.main.run()
+// A bare Foundation RunLoop cannot answer the activation Apple Event macOS
+// sends when a notification is clicked, so LaunchServices spawns a duplicate
+// instance and the launch watchdog times out ("application is not responding").
+// Running a real AppKit event loop as an .accessory (no Dock icon, paired with
+// LSUIElement) lets the live instance handle the click and deliver
+// UNUserNotificationCenterDelegate callbacks in-process.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        start()
+    }
+}
+
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()
