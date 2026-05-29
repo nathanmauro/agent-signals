@@ -35,12 +35,19 @@ if [[ -d "$HOME/Developer/config/voice/bin" ]]; then
   ln -sf "$repo_root/bin/agent-focus-pane" "$HOME/Developer/config/voice/bin/agent-focus-pane"
 fi
 
-launchctl bootout "gui/$uid" "$launch_agents/com.nathan.AgentSignalsNotifier.plist" >/dev/null 2>&1 || true
-launchctl bootout "gui/$uid" "$launch_agents/com.nathan.agent-signald.plist" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$uid" "$launch_agents/com.nathan.agent-signald.plist"
-launchctl bootstrap "gui/$uid" "$launch_agents/com.nathan.AgentSignalsNotifier.plist"
-launchctl kickstart -k "gui/$uid/com.nathan.agent-signald"
-launchctl kickstart -k "gui/$uid/com.nathan.AgentSignalsNotifier"
+# (Re)load each LaunchAgent. bootstrap fails if the service is already
+# loaded (re-install), so it's best-effort; kickstart -k then guarantees a
+# fresh start from the new on-disk binary whether or not bootstrap ran.
+reload_agent() {
+  local label="$1"
+  local plist="$launch_agents/$label.plist"
+  launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$uid" "$plist" >/dev/null 2>&1 || true
+  launchctl kickstart -k "gui/$uid/$label"
+}
+
+reload_agent com.nathan.agent-signald
+reload_agent com.nathan.AgentSignalsNotifier
 
 "$bin_dir/agent-signal" sweep --legacy --dry-run
 "$bin_dir/agent-signal" doctor --verbose
