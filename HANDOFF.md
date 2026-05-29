@@ -13,7 +13,8 @@ hook → agent-signal (Rust client)
           │  Unix socket: ~/.local/state/agent-signals/agent-signald.sock
           ▼
        agent-signald (Rust daemon, LaunchAgent, KeepAlive)
-          │  dedup (20s) · context store · active-index (cap 32) · spool (cap 128) · 24h sweep
+          │  dedup (20s, age-GC'd + count cap) · context store (24h TTL, active-index cap 32)
+          │  spool (cap 128) · periodic sweep every 6h on a dedicated thread
           │  persistent socket
           ▼
        AgentSignalsNotifier.app (Swift, LaunchAgent) — UNUserNotificationCenter
@@ -29,32 +30,39 @@ hook → agent-signal (Rust client)
 - `native/rust/src/lib.rs` — the entire daemon + client (one file). Bins: `agent-signal`, `agent-signald`.
 - `native/swift/AgentSignalsNotifier/main.swift` — notifier helper (socket client + UNUserNotificationCenter).
 - `src/agent_signals/` — Python package: TTS/voice (Kokoro) + a parallel legacy CLI.
-- `bin/` — hook wrappers (`agent-response-notify`, `agent-focus-pane`) → call `agent-signal`.
-- `launchd/` — the two LaunchAgent plists. `scripts/install-native.sh` — build + install + load + doctor.
+- `bin/` — hook wrappers (`agent-response-notify`, `agent-focus-pane`) → call `agent-signal`. Installed to `~/.local/bin` by `install-native.sh`.
+- `launchd/` — the two LaunchAgent plists.
+- `scripts/install-native.sh` — build + install (bins, wrappers, app, plists) + load + doctor. `scripts/uninstall-native.sh` — unload + remove.
+- `README.md` — install / usage / troubleshooting.
 
-## Current status (verified 2026-05-28)
+## Current status (2026-05-28)
 
-- ✅ Built, installed; both LaunchAgents running. Rust 7/7, Python 36/36 green.
-- ✅ Daemon healthy, notifier connected, processing live traffic.
-- ⚠️ **Notification authorization = DENIED.** The pipeline completes ("posted") and bell + sound fire, but macOS suppresses the visible banner. **This is the one thing between "running" and "you actually see a notification."**
+The native rewrite is **code-complete**. Daemon + client + notifier all built; Rust + Python suites green.
 
-## Plan / open items (priority order)
+- ✅ State growth is bounded on every path: dedup is age-GC'd **and** count-capped (`MAX_DEDUP_FILES`), contexts GC'd by 24h TTL + active-index cap 32, spool capped at 128. The sweep is **periodic** — it runs every 6h on a dedicated thread, not just at startup.
+- ✅ `doctor` reports a remediation hint when notification auth is denied.
+- ✅ README, `scripts/uninstall-native.sh`, and the `install-native.sh` bin/ wrapper install are all in place.
 
-1. **Fix notification auth (last mile).** `agent-signal doctor` reports `denied`. Allow "AgentSignalsNotifier" in System Settings → Notifications, or `tccutil reset Notifications` + relaunch the app to re-trigger the prompt. Confirm with `agent-signal doctor` → `authorized`.
-2. **Git remote.** Repo is local-only as of this commit. Decide public vs private, then `gh repo create` + push. (Standing action: "enable remote session access.")
-3. **`dedup/` growth.** The `dedup/` dir is uncapped by count; the sweep only runs at daemon startup. Add a count cap and/or a periodic sweep so it can't accumulate between restarts. Harmless today (~10 bytes/file) but it's the one unbounded path.
-4. **Legacy state cleanup.** ~42 old hash files linger in the state-dir root from the pre-reorg era. `agent-signal sweep --legacy` clears them.
-5. **Teardown.** Confirm the old `~/Developer/config/voice/bin/` scripts are fully superseded by the symlinks into this repo.
+## Plan / open items
+
+These remaining items are **system/user actions**, not code work.
+
+1. **Grant notification authorization (the one manual last-mile).** macOS suppresses the visible banner until the user allows "AgentSignalsNotifier" in **System Settings → Notifications** (`agent-signal doctor` prints the remediation hint). If the prompt never appeared: `tccutil reset Notifications` + relaunch the app. The pipeline already completes ("posted") and bell + sound fire regardless. Confirm with `agent-signal doctor` → `authorized`.
+2. **Live install + hook wiring on a given machine.** Run `scripts/install-native.sh`, then add the Stop and Notification hooks to `~/.claude/settings.json` pointing at `agent-response-notify`.
+3. **Git remote + push (in progress).** Repo is local-only as of this commit; decide public vs private, then `gh repo create` + push.
 
 ## Commands
 
 ```bash
-scripts/install-native.sh                 # build + install + load LaunchAgents + doctor
-agent-signal doctor --verbose             # health: socket, notifier, auth
+scripts/install-native.sh                 # build + install (bins, wrappers, app, plists) + load + doctor
+scripts/uninstall-native.sh               # unload LaunchAgents + remove installed artifacts
+agent-signal doctor --verbose             # health: socket, notifier, auth (+ auth remediation hint)
 agent-signal sweep --legacy --dry-run     # preview state cleanup
-cd native/rust && cargo test              # Rust suite (7 tests)
-.venv/bin/python -m pytest -q             # Python TTS suite (36 tests)
+cd native/rust && cargo test              # Rust suite
+.venv/bin/python -m pytest -q             # Python TTS suite
 ```
+
+See `README.md` for full install / usage / troubleshooting.
 
 ## State / paths
 

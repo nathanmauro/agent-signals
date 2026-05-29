@@ -17,6 +17,12 @@ install -m 0755 "$repo_root/native/rust/target/release/agent-signald" "$bin_dir/
 ln -sf "$repo_root/bin/agent-response-notify" "$bin_dir/agent-response-notify"
 ln -sf "$repo_root/bin/agent-focus-pane" "$bin_dir/agent-focus-pane"
 
+echo "==> Installing hook wrappers → $bin_dir"
+for wrapper in "$repo_root"/bin/*; do
+  [ -f "$wrapper" ] || continue
+  install -m 0755 "$wrapper" "$bin_dir/$(basename "$wrapper")"
+done
+
 app_path="$("$repo_root/native/swift/build-app.sh")"
 rm -rf "$app_dir/AgentSignalsNotifier.app"
 cp -R "$app_path" "$app_dir/AgentSignalsNotifier.app"

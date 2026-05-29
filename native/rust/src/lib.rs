@@ -19,7 +19,9 @@ use wait_timeout::ChildExt;
 const DEDUP_SECONDS: u64 = 20;
 const RETENTION_SECONDS: u64 = 24 * 60 * 60;
 const MAX_SPOOL_FILES: usize = 128;
+const MAX_DEDUP_FILES: usize = 1024;
 const MAX_ACTIVE_NOTIFICATIONS: usize = 32;
+const SWEEP_INTERVAL_SECONDS: u64 = 6 * 60 * 60;
 const DEFAULT_SOUND: &str = "/System/Library/Sounds/Glass.aiff";
 
 #[derive(Debug, Clone)]
@@ -468,7 +470,11 @@ fn parse_hook_payload(label: &str, raw: &str) -> Option<AgentEvent> {
         serde_json::from_str(raw).unwrap_or_else(|_| Value::Object(Default::default()))
     };
     let event_type = string_field(&data, &["type", "hook_event_name"]);
-    if !event_type.is_empty() && event_type != "agent-turn-complete" && event_type != "Stop" {
+    if !event_type.is_empty()
+        && event_type != "agent-turn-complete"
+        && event_type != "Stop"
+        && event_type != "Notification"
+    {
         return None;
     }
     let transcript = string_field(
@@ -515,7 +521,11 @@ fn string_field(data: &Value, keys: &[&str]) -> String {
 fn build_envelope(event: AgentEvent) -> NotifyEnvelope {
     let key = event.dedup_key();
     let payload = build_payload(&event, &key);
-    let severity = classify_severity(&extract_last_response(&event.transcript_path));
+    let severity = if event.event_type == "Notification" {
+        "needs_input".to_string()
+    } else {
+        classify_severity(&extract_last_response(&event.transcript_path))
+    };
     let channels = channels_for_severity(&severity);
     let group_key = notification_group_key(&event, &payload);
     let notification_id = sha256_hex(&group_key).chars().take(32).collect::<String>();
@@ -531,7 +541,12 @@ fn build_envelope(event: AgentEvent) -> NotifyEnvelope {
 }
 
 fn build_payload(event: &AgentEvent, key: &str) -> NotifyPayload {
-    let title = format!("{} responded", event.client);
+    let is_notification = event.event_type == "Notification";
+    let title = if is_notification {
+        format!("{} needs input", event.client)
+    } else {
+        format!("{} responded", event.client)
+    };
     let mut subtitle = String::new();
     let mut message = "Prompt response is ready.".to_string();
     let mux = event.mux.clone();
@@ -569,6 +584,20 @@ fn build_payload(event: &AgentEvent, key: &str) -> NotifyPayload {
             message = format!("{}: response is ready.", event.cwd_name());
         }
         _ => {}
+    }
+
+    if is_notification {
+        let hook_message = event
+            .raw
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        message = if hook_message.is_empty() {
+            "Waiting for your input. Click to focus.".to_string()
+        } else {
+            hook_message.to_string()
+        };
     }
 
     NotifyPayload {
@@ -967,6 +996,30 @@ impl Daemon {
         })
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
 
+        let sweep_paths = self.paths.clone();
+        let sweep_flag = running.clone();
+        thread::spawn(move || {
+            let interval = Duration::from_secs(SWEEP_INTERVAL_SECONDS);
+            let tick = Duration::from_secs(1);
+            let mut waited = Duration::ZERO;
+            while sweep_flag.load(Ordering::SeqCst) {
+                thread::sleep(tick);
+                waited += tick;
+                if waited < interval {
+                    continue;
+                }
+                waited = Duration::ZERO;
+                match sweep_expired(&sweep_paths, false) {
+                    Ok(report) if report.total_removed > 0 => eprintln!(
+                        "agent-signald: periodic sweep removed {} expired state files",
+                        report.total_removed
+                    ),
+                    Ok(_) => {}
+                    Err(err) => eprintln!("agent-signald: periodic sweep failed: {err}"),
+                }
+            }
+        });
+
         while running.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((stream, _)) => {
@@ -1339,7 +1392,8 @@ fn sweep_expired(paths: &Paths, dry_run: bool) -> io::Result<SweepReport> {
     paths.ensure()?;
     let cutoff = now_secs().saturating_sub(RETENTION_SECONDS);
     let contexts_removed = remove_old_files(&paths.contexts_dir, cutoff, dry_run)?;
-    let dedup_removed = remove_old_files(&paths.dedup_dir, cutoff, dry_run)?;
+    let mut dedup_removed = remove_old_files(&paths.dedup_dir, cutoff, dry_run)?;
+    dedup_removed += cap_files_by_count(&paths.dedup_dir, MAX_DEDUP_FILES, dry_run)?;
     let spool_removed = remove_old_files(&paths.spool_dir, cutoff, dry_run)?;
     let legacy_root_removed = remove_old_legacy_state_files(paths, cutoff, dry_run)?;
     let mut active_removed = 0;
@@ -1399,6 +1453,21 @@ fn remove_old_files(dir: &Path, cutoff: u64, dry_run: bool) -> io::Result<usize>
         }
     }
     Ok(removed)
+}
+
+fn cap_files_by_count(dir: &Path, cap: usize, dry_run: bool) -> io::Result<usize> {
+    let mut files = dir_files(dir)?;
+    if files.len() <= cap {
+        return Ok(0);
+    }
+    files.sort_by_key(|path| modified_secs(path).unwrap_or(0));
+    let remove_count = files.len() - cap;
+    for path in files.iter().take(remove_count) {
+        if !dry_run {
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(remove_count)
 }
 
 fn remove_old_legacy_state_files(paths: &Paths, cutoff: u64, dry_run: bool) -> io::Result<usize> {
@@ -1654,9 +1723,12 @@ fn handle_doctor(paths: &Paths, verbose: bool) {
                 },
                 authorization
             );
-            if authorization == "denied" {
+            if authorization != "authorized" && authorization != "unknown" {
                 println!(
-                    "          allow Agent Signals Notifier in System Settings > Notifications"
+                    "          fix: open System Settings > Notifications > AgentSignalsNotifier and allow notifications"
+                );
+                println!(
+                    "               or run: open \"x-apple.systempreferences:com.apple.preference.notifications\""
                 );
             }
             if verbose {
@@ -1774,6 +1846,25 @@ mod tests {
     }
 
     #[test]
+    fn notification_event_uses_hook_message() {
+        let raw = r#"{
+          "hook_event_name": "Notification",
+          "session_id": "sess_1",
+          "cwd": "/Users/nathan/Developer/proj/test",
+          "message": "Claude needs your permission to use Bash"
+        }"#;
+        let event = parse_hook_payload("Claude Code", raw).unwrap();
+        assert_eq!(event.event_type, "Notification");
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.severity, "needs_input");
+        assert!(envelope.payload.title.contains("needs input"));
+        assert_eq!(
+            envelope.payload.message,
+            "Claude needs your permission to use Bash"
+        );
+    }
+
+    #[test]
     fn dedup_key_is_stable() {
         let e1 = AgentEvent {
             client: "Claude Code".to_string(),
@@ -1853,6 +1944,39 @@ mod tests {
         fs::write(&stale, "{}").unwrap();
         let report = sweep_expired(&paths, false).unwrap();
         assert_eq!(report.total_removed, 0);
+    }
+
+    #[test]
+    fn dedup_dir_is_capped_by_count() {
+        let temp = tempdir().unwrap();
+        let paths = Paths::from_state_dir(temp.path().to_path_buf());
+        paths.ensure().unwrap();
+        let extra = 50;
+        let total = MAX_DEDUP_FILES + extra;
+        // Create more than the cap, with strictly increasing mtimes so the
+        // newest (highest index) files are the ones expected to survive.
+        let base = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        for idx in 0..total {
+            let path = paths.dedup_dir.join(format!("{idx:08}"));
+            fs::write(&path, "x").unwrap();
+            let mtime = base + Duration::from_secs(idx as u64);
+            fs::File::open(&path)
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+        let removed = cap_files_by_count(&paths.dedup_dir, MAX_DEDUP_FILES, false).unwrap();
+        assert_eq!(removed, extra);
+        let remaining = dir_files(&paths.dedup_dir).unwrap();
+        assert!(remaining.len() <= MAX_DEDUP_FILES);
+        // The newest files (indices extra..total) must still be present.
+        for idx in extra..total {
+            assert!(paths.dedup_dir.join(format!("{idx:08}")).exists());
+        }
+        // The oldest files (indices 0..extra) must have been removed.
+        for idx in 0..extra {
+            assert!(!paths.dedup_dir.join(format!("{idx:08}")).exists());
+        }
     }
 
     #[test]
