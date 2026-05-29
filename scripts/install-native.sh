@@ -14,13 +14,16 @@ cargo build --release --manifest-path "$repo_root/native/rust/Cargo.toml"
 rm -f "$bin_dir/agent-signal" "$bin_dir/agent-signald"
 install -m 0755 "$repo_root/native/rust/target/release/agent-signal" "$bin_dir/agent-signal"
 install -m 0755 "$repo_root/native/rust/target/release/agent-signald" "$bin_dir/agent-signald"
-ln -sf "$repo_root/bin/agent-response-notify" "$bin_dir/agent-response-notify"
-ln -sf "$repo_root/bin/agent-focus-pane" "$bin_dir/agent-focus-pane"
 
+# Install every hook wrapper in bin/ onto PATH so hooks can call them by name.
+# rm -f first: a leftover symlink pointing back at the source would make
+# `install` fail with "same file".
 echo "==> Installing hook wrappers → $bin_dir"
 for wrapper in "$repo_root"/bin/*; do
   [ -f "$wrapper" ] || continue
-  install -m 0755 "$wrapper" "$bin_dir/$(basename "$wrapper")"
+  dest="$bin_dir/$(basename "$wrapper")"
+  rm -f "$dest"
+  install -m 0755 "$wrapper" "$dest"
 done
 
 app_path="$("$repo_root/native/swift/build-app.sh")"
@@ -41,9 +44,15 @@ fi
 reload_agent() {
   local label="$1"
   local plist="$launch_agents/$label.plist"
-  launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$uid" "$plist" >/dev/null 2>&1 || true
-  launchctl kickstart -k "gui/$uid/$label"
+  if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+    # Already loaded: restart in place so the freshly installed binary is
+    # exec'd. (bootout of a KeepAlive agent races with its respawn, so we
+    # avoid it and let kickstart -k cycle the process.)
+    launchctl kickstart -k "gui/$uid/$label"
+  else
+    launchctl bootstrap "gui/$uid" "$plist"
+    launchctl kickstart "gui/$uid/$label"
+  fi
 }
 
 reload_agent com.nathan.agent-signald
