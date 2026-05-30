@@ -1,0 +1,36 @@
+{
+  "name": "claude-responded-zellij",
+  "source": "real event — contexts/16ea306…json (Claude Code 'responded', zellij signals)",
+  "note": "Stop hook. transcript_path points at a .claude transcript that does not exist in CI, so severity falls back to 'normal'. message is the zellij 'ready, click to focus' render.",
+  "label": "Claude Code",
+  "raw": {
+    "type": "Stop",
+    "hook_event_name": "Stop",
+    "transcript_path": "/Users/nathan/.claude/projects/example/00000000.jsonl",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "thread-id": "thread_signals_31",
+    "turn-id": "turn_007"
+  },
+  "inject_mux": {
+    "type": "zellij",
+    "session": "default",
+    "pane_ref": "terminal_31",
+    "pane_title": "zellij:status-bar",
+    "tab_name": "signals",
+    "tab_id": "9",
+    "tab_position": "4"
+  },
+  "expect": {
+    "parsed": true,
+    "client": "Claude Code",
+    "event_type": "Stop",
+    "thread_id": "thread_signals_31",
+    "turn_id": "turn_007",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "severity": "normal",
+    "title": "Claude Code responded",
+    "subtitle": "default / signals",
+    "message": "zellij:status-bar (terminal_31) is ready. Click to focus.",
+    "group_key": "agent-signals:Claude Code:zellij:default:terminal_31"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "ignored-pretooluse",
+  "source": "synthetic-from-real-shape — a PreToolUse hook event that must NOT notify",
+  "note": "parse_hook_payload only accepts Stop / Notification / agent-turn-complete.",
+  "label": "Claude Code",
+  "raw": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals"
+  },
+  "inject_mux": null,
+  "expect": {
+    "parsed": false
+  }
+}

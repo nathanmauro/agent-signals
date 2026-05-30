@@ -1,0 +1,28 @@
+{
+  "name": "claude-responded-cwd",
+  "source": "real event — contexts/f0a9f9d…json (Claude Code 'responded', no multiplexer)",
+  "note": "No mux context → cwd-fallback render and cwd: group key.",
+  "label": "Claude Code",
+  "raw": {
+    "type": "Stop",
+    "hook_event_name": "Stop",
+    "transcript_path": "/Users/nathan/.claude/projects/cockpit/00000000.jsonl",
+    "cwd": "/Users/nathan/Documents/cockpit",
+    "thread-id": "thread_cockpit",
+    "turn-id": "turn_001"
+  },
+  "inject_mux": null,
+  "expect": {
+    "parsed": true,
+    "client": "Claude Code",
+    "event_type": "Stop",
+    "thread_id": "thread_cockpit",
+    "turn_id": "turn_001",
+    "cwd": "/Users/nathan/Documents/cockpit",
+    "severity": "normal",
+    "title": "Claude Code responded",
+    "subtitle": "",
+    "message": "cockpit: response is ready.",
+    "group_key": "agent-signals:Claude Code:cwd:/Users/nathan/Documents/cockpit"
+  }
+}

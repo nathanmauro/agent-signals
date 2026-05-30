@@ -1,0 +1,36 @@
+{
+  "name": "claude-notification-zellij",
+  "source": "real event — contexts/3f4f30…json (Claude Code 'needs input', zellij sba-agentic)",
+  "note": "Notification hook. message is taken verbatim from the hook payload. thread_id comes from session_id alias.",
+  "label": "Claude Code",
+  "raw": {
+    "hook_event_name": "Notification",
+    "session_id": "a325474c-11d3-42e0-8d7e-3b1e7bcae235",
+    "cwd": "/Users/nathan/Developer/proj/sba-agentic",
+    "message": "Claude is waiting for your input"
+  },
+  "inject_mux": {
+    "type": "zellij",
+    "session": "default",
+    "pane_ref": "terminal_19",
+    "pane_title": "✳ black-box-workflow-codex-branch-1",
+    "tab_name": "sba-agentic",
+    "tab_id": "6",
+    "tab_position": "2",
+    "cwd": "/Users/nathan/Developer/proj/sba-agentic",
+    "command": "claude --resume"
+  },
+  "expect": {
+    "parsed": true,
+    "client": "Claude Code",
+    "event_type": "Notification",
+    "thread_id": "a325474c-11d3-42e0-8d7e-3b1e7bcae235",
+    "turn_id": "",
+    "cwd": "/Users/nathan/Developer/proj/sba-agentic",
+    "severity": "needs_input",
+    "title": "Claude Code needs input",
+    "subtitle": "default / sba-agentic",
+    "message": "Claude is waiting for your input",
+    "group_key": "agent-signals:Claude Code:zellij:default:terminal_19"
+  }
+}

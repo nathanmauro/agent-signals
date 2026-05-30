@@ -1,0 +1,31 @@
+{
+  "name": "codex-turn-complete-exec",
+  "source": "real event — codex_exec agent-turn-complete (sba-agentic)",
+  "note": "Verbatim real Codex agent-turn-complete payload (input-messages truncated for size; all parser-relevant fields untouched). No mux → cwd-fallback render.",
+  "label": "codex_exec",
+  "raw": {
+    "type": "agent-turn-complete",
+    "thread-id": "019e762b-8a07-7401-8027-2ae902d31547",
+    "turn-id": "019e762b-8ae4-7270-be3c-bb2892a45daa",
+    "cwd": "/Users/nathan/Developer/proj/sba-agentic",
+    "client": "codex_exec",
+    "input-messages": [
+      "You are creating the hero asset for the Black Box README. Working dir is repo root.\n\nBlack Box signature moment: a fresh agent calls recallContext and an amber …[truncated for fixture]"
+    ],
+    "last-assistant-message": "Created/changed only the requested files:\n\n- `docs/assets/hero.svg`: animated self-contained SVG illustration of the recall beam striking the Cognition Spine and surfacing a structured Decision card.\n- `scripts/capture-hero.sh`: executable capture script with dependency checks, clear install hints, Playwright-driven UI capture, and `gifski`/`ffmpeg` GIF encoding to `docs/assets/hero.gif`.\n- `README.md`: hero now points to `docs/assets/hero.svg`; comment/blockquote explain SVG is illustrative and the script records the real UI GIF.\n\nValidation run: `bash -n`, `shellcheck`, and `xmllint --noout` all pass. I did not run the capture script end-to-end, so it did not create `docs/assets/hero.gif`; `hero.png` was left untouched. No git add/commit/push run.\n\n"
+  },
+  "inject_mux": null,
+  "expect": {
+    "parsed": true,
+    "client": "codex_exec",
+    "event_type": "agent-turn-complete",
+    "thread_id": "019e762b-8a07-7401-8027-2ae902d31547",
+    "turn_id": "019e762b-8ae4-7270-be3c-bb2892a45daa",
+    "cwd": "/Users/nathan/Developer/proj/sba-agentic",
+    "severity": "normal",
+    "title": "codex_exec responded",
+    "subtitle": "",
+    "message": "sba-agentic: response is ready.",
+    "group_key": "agent-signals:codex_exec:cwd:/Users/nathan/Developer/proj/sba-agentic"
+  }
+}
