@@ -463,7 +463,7 @@ fn read_payload_arg_or_stdin(payload_arg: Option<String>) -> io::Result<String> 
     Ok(raw)
 }
 
-fn parse_hook_payload(label: &str, raw: &str) -> Option<AgentEvent> {
+pub fn parse_hook_payload(label: &str, raw: &str) -> Option<AgentEvent> {
     let data: Value = if raw.trim().is_empty() {
         Value::Object(Default::default())
     } else {
@@ -518,7 +518,7 @@ fn string_field(data: &Value, keys: &[&str]) -> String {
         .to_string()
 }
 
-fn build_envelope(event: AgentEvent) -> NotifyEnvelope {
+pub fn build_envelope(event: AgentEvent) -> NotifyEnvelope {
     let key = event.dedup_key();
     let payload = build_payload(&event, &key);
     let severity = if event.event_type == "Notification" {

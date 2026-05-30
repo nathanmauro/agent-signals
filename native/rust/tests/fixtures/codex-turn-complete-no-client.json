@@ -1,0 +1,30 @@
+{
+  "name": "codex-turn-complete-no-client",
+  "source": "real event — Codex agent-turn-complete with NO client field (.codex/memories); label-less fallback",
+  "note": "Verbatim real Codex agent-turn-complete payload (input-messages truncated for size; all parser-relevant fields untouched). No mux → cwd-fallback render.",
+  "label": "",
+  "raw": {
+    "type": "agent-turn-complete",
+    "thread-id": "019e7633-a985-7c91-979e-7f0648519f61",
+    "turn-id": "019e7633-a9d6-7c31-ad7f-3a63e4a5aff6",
+    "cwd": "/Users/nathan/.codex/memories",
+    "input-messages": [
+      "## Memory Writing Agent: Phase 2 (Consolidation)\n\nYou are a Memory Writing Agent.\n\nYour job: consolidate raw memories and rollout summaries into a local, file-b…[truncated for fixture]"
+    ],
+    "last-assistant-message": "Updated [MEMORY.md](/Users/nathan/.codex/memories/MEMORY.md) and [memory_summary.md](/Users/nathan/.codex/memories/memory_summary.md).\n\nThe consolidation is now aligned to current evidence only: I rebuilt the durable memory around the still-supported Chronicle resources, the one surviving TeamSnap rollout summary, and the ad hoc employment notes, and removed the stale rollout-only sections that lost support in this diff.\n\nChronological details added to `MEMORY.md` from the new Chronicle window were:\n- Cockpit docs routing, project-scoped seed continuity, IntelliJ color-wrapper setup, and the later Zed editor-flow pivot.\n- Logseq day-review structure, collapsible Claude-session grouping, and the `export-to-logseq` hook fix.\n- Black Box Claude capture proof, process-sprawl diagnosis, Chronicle ingest direction, and the later Phase 2 “lock this down” verification posture.\n- The `todo` sync-plan convergence details around `todo refresh`, `todo audit`, and curated Logseq eligibility.\n- The late-day `agent-signals` native rollout verification/push context and remaining macOS permission/style step.\n\nI did not change `skills/`; the existing [skills/employment-handoff-branch/SKILL.md](/Users/nathan/.codex/memories/skills/employment-handoff-branch/SKILL.md) is still referenced from memory. No tests were run."
+  },
+  "inject_mux": null,
+  "expect": {
+    "parsed": true,
+    "client": "Codex",
+    "event_type": "agent-turn-complete",
+    "thread_id": "019e7633-a985-7c91-979e-7f0648519f61",
+    "turn_id": "019e7633-a9d6-7c31-ad7f-3a63e4a5aff6",
+    "cwd": "/Users/nathan/.codex/memories",
+    "severity": "normal",
+    "title": "Codex responded",
+    "subtitle": "",
+    "message": "memories: response is ready.",
+    "group_key": "agent-signals:Codex:cwd:/Users/nathan/.codex/memories"
+  }
+}

@@ -29,6 +29,7 @@ hook → agent-signal (Rust client)
 ## Source layout
 
 - `native/rust/src/lib.rs` — the entire daemon + client (one file). Bins: `agent-signal`, `agent-signald`.
+- `native/rust/tests/replay_real_events.rs` + `tests/fixtures/*.json` — real notification events captured from live daemon state, replayed through `parse_hook_payload` → `build_envelope` to pin severity / group_key / rendered payload. Includes the Codex `--client`-blob regression (see open item 3). `parse_hook_payload` and `build_envelope` are `pub` so the integration crate can call them.
 - `native/swift/AgentSignalsNotifier/main.swift` — notifier helper (socket client + UNUserNotificationCenter).
 - `src/agent_signals/` — Python package: TTS/voice (Kokoro) + a parallel legacy CLI.
 - `bin/` — hook wrappers (`agent-response-notify`, `agent-focus-pane`) → call `agent-signal`. Installed to `~/.local/bin` by `install-native.sh`.
@@ -53,6 +54,7 @@ Remaining:
 
 1. **Verify click→focus end-to-end.** Now that clicks deliver (post-AppKit fix), confirm a real banner click activates the originating Ghostty + zellij/tmux pane via `focus_context`. This path was unreachable before 2026-05-29, so it has effectively never been exercised on a live click.
 2. **Persistent banners (user action).** Banner-vs-Alert is a System Settings choice, not code: **System Settings → Notifications → Agent Signals Notifier → "Alerts"** to make banners stay until dismissed. Code cannot force it — `.timeSensitive` only overrides DND, and `.critical` needs an Apple entitlement an ad-hoc local build can't have.
+3. **Codex hook passes the whole payload as `--client` (real bug, found 2026-05-29).** Every captured Codex `agent-turn-complete` event in live state had its entire raw JSON payload stuffed into `event.client`, which then contaminated `group_key`/`notification_id` — so every Codex turn got a distinct JSON-shaped group key instead of a stable per-pane/per-cwd one (defeating dedup + per-pane grouping). The Rust pipeline is innocent; the fault is the Codex hook wrapper invoking `agent-signal notify --client "<raw payload>"`. Separately, `parse_hook_payload` never reads the payload's own `client` field — it relies solely on the `--client` label or the transcript-path heuristic. Fix: make the Codex hook pass a fixed label (`--client Codex`), or teach the parser to read a `client` key from the payload. Pinned by `real_codex_client_blob_regression` in the test corpus.
 
 ## Commands
 

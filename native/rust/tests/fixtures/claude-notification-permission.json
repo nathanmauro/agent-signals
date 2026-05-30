@@ -1,0 +1,36 @@
+{
+  "name": "claude-notification-permission",
+  "source": "real event — contexts/7f10fca…json (Claude Code permission prompt, zellij signals)",
+  "note": "A second real Notification message string ('Claude needs your permission').",
+  "label": "Claude Code",
+  "raw": {
+    "hook_event_name": "Notification",
+    "session_id": "a325474c-11d3-42e0-8d7e-3b1e7bcae235",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "message": "Claude needs your permission"
+  },
+  "inject_mux": {
+    "type": "zellij",
+    "session": "default",
+    "pane_ref": "terminal_4",
+    "pane_title": "✳ Review handoff.md next items",
+    "tab_name": "signals",
+    "tab_id": "9",
+    "tab_position": "4",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "command": "claude --session-id a325474c-11d3-42e0-8d7e-3b1e7bcae235"
+  },
+  "expect": {
+    "parsed": true,
+    "client": "Claude Code",
+    "event_type": "Notification",
+    "thread_id": "a325474c-11d3-42e0-8d7e-3b1e7bcae235",
+    "turn_id": "",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "severity": "needs_input",
+    "title": "Claude Code needs input",
+    "subtitle": "default / signals",
+    "message": "Claude needs your permission",
+    "group_key": "agent-signals:Claude Code:zellij:default:terminal_4"
+  }
+}

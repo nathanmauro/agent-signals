@@ -1,0 +1,31 @@
+{
+  "name": "codex-turn-complete-desktop",
+  "source": "real event — Codex Desktop agent-turn-complete (worktrees/b7c6/cockpit)",
+  "note": "Verbatim real Codex agent-turn-complete payload (input-messages truncated for size; all parser-relevant fields untouched). No mux → cwd-fallback render.",
+  "label": "Codex Desktop",
+  "raw": {
+    "type": "agent-turn-complete",
+    "thread-id": "019e760f-1bb4-7963-837f-0d1e98fd3aec",
+    "turn-id": "019e760f-1c5b-75e1-8c4c-31e233e8f9cf",
+    "cwd": "/Users/nathan/.codex/worktrees/b7c6/cockpit",
+    "client": "Codex Desktop",
+    "input-messages": [
+      "You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title for a task that will be created from that prompt…[truncated for fixture]"
+    ],
+    "last-assistant-message": "{\"title\":\"Create Claude Code ACP branch\"}"
+  },
+  "inject_mux": null,
+  "expect": {
+    "parsed": true,
+    "client": "Codex Desktop",
+    "event_type": "agent-turn-complete",
+    "thread_id": "019e760f-1bb4-7963-837f-0d1e98fd3aec",
+    "turn_id": "019e760f-1c5b-75e1-8c4c-31e233e8f9cf",
+    "cwd": "/Users/nathan/.codex/worktrees/b7c6/cockpit",
+    "severity": "normal",
+    "title": "Codex Desktop responded",
+    "subtitle": "",
+    "message": "cockpit: response is ready.",
+    "group_key": "agent-signals:Codex Desktop:cwd:/Users/nathan/.codex/worktrees/b7c6/cockpit"
+  }
+}
