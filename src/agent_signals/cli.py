@@ -16,6 +16,10 @@ def cmd_notify(args: argparse.Namespace) -> None:
     if event is None:
         return
 
+    from agent_signals.policy import is_suppressed_turn
+    if is_suppressed_turn(event):
+        return
+
     from agent_signals.models import NotifyPayload
     title = f"{event.client} responded"
     subtitle = ""

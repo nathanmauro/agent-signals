@@ -18,7 +18,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use agent_signals_native::{build_envelope, parse_hook_payload, MuxContext};
+use agent_signals_native::{build_envelope, is_suppressed_turn, parse_hook_payload, MuxContext};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -55,6 +55,8 @@ struct Expect {
     message: String,
     #[serde(default)]
     group_key: String,
+    #[serde(default)]
+    suppressed: bool,
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -115,6 +117,16 @@ fn replays_every_real_event_fixture() {
         assert_eq!(event.thread_id, v.expect.thread_id, "[{}] thread_id", v.name);
         assert_eq!(event.turn_id, v.expect.turn_id, "[{}] turn_id", v.name);
         assert_eq!(event.cwd, v.expect.cwd, "[{}] cwd", v.name);
+
+        // JSON-only turn-completions (e.g. Codex Desktop title generation) are
+        // gated out before an envelope is ever built; needs-input and prose
+        // turns are not.
+        assert_eq!(
+            is_suppressed_turn(&event),
+            v.expect.suppressed,
+            "[{}] suppressed",
+            v.name
+        );
 
         // Pin the mux to the captured value so `detect_mux()` reading the test
         // host's real environment can't perturb the rendered payload.

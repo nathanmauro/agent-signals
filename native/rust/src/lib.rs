@@ -418,6 +418,9 @@ fn handle_notify_cli(
     let Some(event) = parse_hook_payload(&client, &raw) else {
         return Ok(0);
     };
+    if is_suppressed_turn(&event) {
+        return Ok(0);
+    }
     let envelope = build_envelope(event);
 
     if dry_run {
@@ -696,6 +699,48 @@ fn extract_codex_text(text: &str) -> String {
         return parts.collect::<Vec<_>>().join("\n").trim().to_string();
     }
     String::new()
+}
+
+/// The agent's final message for this turn. Codex delivers it inline on the
+/// hook payload (`last-assistant-message`); Claude Code leaves it in the
+/// transcript, which we read back.
+fn last_assistant_message(event: &AgentEvent) -> String {
+    if let Some(inline) = event
+        .raw
+        .get("last-assistant-message")
+        .and_then(Value::as_str)
+    {
+        let trimmed = inline.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    extract_last_response(&event.transcript_path)
+}
+
+/// True when `text` is a standalone JSON object or array — i.e. the whole
+/// message is machine output, not prose. A prose reply that merely mentions or
+/// embeds a JSON snippet won't parse cleanly and is left alone.
+fn looks_like_json(text: &str) -> bool {
+    let trimmed = text.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return false;
+    }
+    matches!(
+        serde_json::from_str::<Value>(trimmed),
+        Ok(Value::Object(_)) | Ok(Value::Array(_))
+    )
+}
+
+/// Suppress turn-completion notifications whose entire response is a JSON blob
+/// (e.g. Codex Desktop's internal title-generation turns, whose
+/// `last-assistant-message` is `{"title":"…"}`). `Notification` events —
+/// permission prompts and "waiting for input" — always surface.
+pub fn is_suppressed_turn(event: &AgentEvent) -> bool {
+    if event.event_type == "Notification" {
+        return false;
+    }
+    looks_like_json(&last_assistant_message(event))
 }
 
 fn classify_severity(text: &str) -> String {
@@ -1862,6 +1907,46 @@ mod tests {
             envelope.payload.message,
             "Claude needs your permission to use Bash"
         );
+    }
+
+    #[test]
+    fn suppresses_json_only_turn_completion() {
+        // Codex Desktop's title-generation turn: the whole response is JSON.
+        let raw = r#"{
+          "type": "agent-turn-complete",
+          "thread-id": "t1",
+          "turn-id": "u1",
+          "cwd": "/tmp/project",
+          "last-assistant-message": "{\"title\":\"Create Claude Code ACP branch\"}"
+        }"#;
+        let event = parse_hook_payload("Codex Desktop", raw).unwrap();
+        assert!(is_suppressed_turn(&event));
+    }
+
+    #[test]
+    fn keeps_prose_turn_completion() {
+        let raw = r#"{
+          "type": "agent-turn-complete",
+          "thread-id": "t1",
+          "turn-id": "u1",
+          "cwd": "/tmp/project",
+          "last-assistant-message": "Created the files you asked for. No tests run."
+        }"#;
+        let event = parse_hook_payload("Codex Desktop", raw).unwrap();
+        assert!(!is_suppressed_turn(&event));
+    }
+
+    #[test]
+    fn keeps_notification_event_even_when_message_is_jsonish() {
+        // A needs-input Notification must always surface, JSON-shaped or not.
+        let raw = r#"{
+          "hook_event_name": "Notification",
+          "session_id": "s1",
+          "cwd": "/tmp/project",
+          "message": "{\"x\":1}"
+        }"#;
+        let event = parse_hook_payload("Claude Code", raw).unwrap();
+        assert!(!is_suppressed_turn(&event));
     }
 
     #[test]

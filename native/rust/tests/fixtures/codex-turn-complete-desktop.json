@@ -1,7 +1,7 @@
 {
   "name": "codex-turn-complete-desktop",
   "source": "real event — Codex Desktop agent-turn-complete (worktrees/b7c6/cockpit)",
-  "note": "Verbatim real Codex agent-turn-complete payload (input-messages truncated for size; all parser-relevant fields untouched). No mux → cwd-fallback render.",
+  "note": "Verbatim real Codex agent-turn-complete payload (input-messages truncated for size; all parser-relevant fields untouched). No mux → cwd-fallback render. last-assistant-message is a pure JSON title blob → suppressed before any notification.",
   "label": "Codex Desktop",
   "raw": {
     "type": "agent-turn-complete",
@@ -26,6 +26,7 @@
     "title": "Codex Desktop responded",
     "subtitle": "",
     "message": "cockpit: response is ready.",
-    "group_key": "agent-signals:Codex Desktop:cwd:/Users/nathan/.codex/worktrees/b7c6/cockpit"
+    "group_key": "agent-signals:Codex Desktop:cwd:/Users/nathan/.codex/worktrees/b7c6/cockpit",
+    "suppressed": true
   }
 }
