@@ -45,6 +45,7 @@ The native rewrite is **deployed and live** on `in8-mac`. Daemon + client + noti
 - ✅ `doctor` reports a remediation hint when notification auth is denied; on `in8-mac` it currently reports `authorized` + `notifier connected: true`.
 - ✅ README, `scripts/uninstall-native.sh`, and the `install-native.sh` bin/ wrapper install are all in place.
 - ✅ **Notification clicks work** (fixed 2026-05-29). The notifier was a bare Foundation `RunLoop` that could not answer the click-activation Apple Event, so every click produced "AgentSignalsNotifier.app is not responding" and LaunchServices spawned a dead duplicate instance. Switched to an AppKit `.accessory` event loop. This is what makes the click→focus path (the headline feature) actually fire — it had never worked on a real click before this.
+- ✅ **Codex JSON-as-client regression is fixed** (2026-06-04). The wrapper now treats a JSON first argument as the payload and defaults the client to `Codex`; `parse_hook_payload` also has the same defensive path. Routine normal turn-complete notifications now reuse the pane-scoped notification id, so they replace the latest card instead of accumulating. `needs_input` notifications still keep distinct ids so prompts can stack by session/window/pane.
 
 ## Plan / open items
 
@@ -54,7 +55,6 @@ Remaining:
 
 1. **Verify click→focus end-to-end.** Now that clicks deliver (post-AppKit fix), confirm a real banner click activates the originating Ghostty + zellij/tmux pane via `focus_context`. This path was unreachable before 2026-05-29, so it has effectively never been exercised on a live click.
 2. **Persistent banners (user action).** Banner-vs-Alert is a System Settings choice, not code: **System Settings → Notifications → Agent Signals Notifier → "Alerts"** to make banners stay until dismissed. Code cannot force it — `.timeSensitive` only overrides DND, and `.critical` needs an Apple entitlement an ad-hoc local build can't have.
-3. **Codex hook passes the whole payload as `--client` (real bug, found 2026-05-29).** Every captured Codex `agent-turn-complete` event in live state had its entire raw JSON payload stuffed into `event.client`, which then contaminated `group_key`/`notification_id` — so every Codex turn got a distinct JSON-shaped group key instead of a stable per-pane/per-cwd one (defeating dedup + per-pane grouping). The Rust pipeline is innocent; the fault is the Codex hook wrapper invoking `agent-signal notify --client "<raw payload>"`. Separately, `parse_hook_payload` never reads the payload's own `client` field — it relies solely on the `--client` label or the transcript-path heuristic. Fix: make the Codex hook pass a fixed label (`--client Codex`), or teach the parser to read a `client` key from the payload. Pinned by `real_codex_client_blob_regression` in the test corpus.
 
 ## Deploying changes — REQUIRED after any source change or PR merge
 

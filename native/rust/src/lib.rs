@@ -519,7 +519,13 @@ fn read_payload_arg_or_stdin(payload_arg: Option<String>) -> io::Result<String> 
 }
 
 pub fn parse_hook_payload(label: &str, raw: &str) -> Option<AgentEvent> {
-    let data: Value = if raw.trim().is_empty() {
+    let mut label = label.trim();
+    let mut raw = raw.trim();
+    if raw.is_empty() && looks_like_json_object(label) {
+        raw = label;
+        label = "";
+    }
+    let data: Value = if raw.is_empty() {
         Value::Object(Default::default())
     } else {
         serde_json::from_str(raw).unwrap_or_else(|_| Value::Object(Default::default()))
@@ -541,8 +547,11 @@ pub fn parse_hook_payload(label: &str, raw: &str) -> Option<AgentEvent> {
             "sessionPath",
         ],
     );
+    let payload_client = string_field(&data, &["client"]);
     let client = if !label.is_empty() {
         label.to_string()
+    } else if !payload_client.is_empty() {
+        payload_client
     } else if transcript.contains(".claude") {
         "Claude Code".to_string()
     } else {
@@ -558,6 +567,10 @@ pub fn parse_hook_payload(label: &str, raw: &str) -> Option<AgentEvent> {
         mux: detect_mux(),
         raw: data,
     })
+}
+
+fn looks_like_json_object(value: &str) -> bool {
+    value.trim_start().starts_with('{')
 }
 
 fn string_field(data: &Value, keys: &[&str]) -> String {
@@ -579,11 +592,11 @@ pub fn build_envelope(event: AgentEvent) -> NotifyEnvelope {
     let severity = if event.event_type == "Notification" {
         "needs_input".to_string()
     } else {
-        classify_severity(&extract_last_response(&event.transcript_path))
+        classify_severity(&last_assistant_message(&event))
     };
     let channels = channels_for_severity(&severity);
     let group_key = notification_group_key(&event, &payload);
-    let notification_id = notification_request_id(&group_key, &key);
+    let notification_id = notification_request_id(&group_key, &key, &severity);
     NotifyEnvelope {
         event,
         payload,
@@ -683,11 +696,13 @@ fn notification_group_key(event: &AgentEvent, payload: &NotifyPayload) -> String
     format!("agent-signals:{}:{target}", event.client)
 }
 
-fn notification_request_id(group_key: &str, event_key: &str) -> String {
-    sha256_hex(&format!("{group_key}:{event_key}"))
-        .chars()
-        .take(32)
-        .collect()
+fn notification_request_id(group_key: &str, event_key: &str, severity: &str) -> String {
+    let seed = if severity == "normal" {
+        group_key.to_string()
+    } else {
+        format!("{group_key}:{event_key}")
+    };
+    sha256_hex(&seed).chars().take(32).collect()
 }
 
 fn extract_last_response(transcript_path: &str) -> String {
@@ -2028,6 +2043,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_codex_payload_when_wrapper_passes_json_as_client_label() {
+        let raw = r#"{
+          "type": "agent-turn-complete",
+          "thread-id": "thread_abc123",
+          "turn-id": "turn_001",
+          "cwd": "/Users/nathan/Developer/proj/agent-signals"
+        }"#;
+        let event = parse_hook_payload(raw, "").unwrap();
+        assert_eq!(event.client, "Codex");
+        assert_eq!(event.event_type, "agent-turn-complete");
+        assert_eq!(event.thread_id, "thread_abc123");
+        assert_eq!(event.turn_id, "turn_001");
+        assert_eq!(event.cwd_name(), "agent-signals");
+    }
+
+    #[test]
     fn ignores_irrelevant_events() {
         assert!(parse_hook_payload("", r#"{"type":"tool_call"}"#).is_none());
     }
@@ -2110,7 +2141,7 @@ mod tests {
     }
 
     #[test]
-    fn same_tmux_pane_notifications_share_stack_but_keep_distinct_ids() {
+    fn same_tmux_pane_normal_notifications_replace_latest_card() {
         let event = AgentEvent {
             client: "Claude Code".to_string(),
             thread_id: "thread".to_string(),
@@ -2138,6 +2169,65 @@ mod tests {
             first.group_key,
             "agent-signals:Claude Code:tmux:default:@7:%1039"
         );
+        assert_eq!(first.group_key, second.group_key);
+        assert_eq!(first.notification_id, second.notification_id);
+    }
+
+    #[test]
+    fn same_tmux_pane_needs_input_notifications_stack_distinct_cards() {
+        let event = AgentEvent {
+            client: "Claude Code".to_string(),
+            thread_id: "thread".to_string(),
+            turn_id: "turn-1".to_string(),
+            cwd: "/tmp/project".to_string(),
+            mux: MuxContext {
+                mux_type: "tmux".to_string(),
+                session: "default".to_string(),
+                window_id: "@7".to_string(),
+                window_name: "opencode".to_string(),
+                pane_id: "%1039".to_string(),
+                ..MuxContext::default()
+            },
+            event_type: "Notification".to_string(),
+            transcript_path: String::new(),
+            raw: json!({"message": "Permission needed"}),
+        };
+        let mut next_event = event.clone();
+        next_event.turn_id = "turn-2".to_string();
+
+        let first = build_envelope(event);
+        let second = build_envelope(next_event);
+
+        assert_eq!(first.severity, "needs_input");
+        assert_eq!(first.group_key, second.group_key);
+        assert_ne!(first.notification_id, second.notification_id);
+    }
+
+    #[test]
+    fn codex_inline_error_message_keeps_distinct_notification_id() {
+        let event = AgentEvent {
+            client: "Codex".to_string(),
+            thread_id: "thread".to_string(),
+            turn_id: "turn-1".to_string(),
+            cwd: "/tmp/project".to_string(),
+            mux: MuxContext {
+                mux_type: "tmux".to_string(),
+                session: "default".to_string(),
+                window_id: "@7".to_string(),
+                pane_id: "%1039".to_string(),
+                ..MuxContext::default()
+            },
+            event_type: "agent-turn-complete".to_string(),
+            transcript_path: String::new(),
+            raw: json!({"last-assistant-message": "The command failed"}),
+        };
+        let mut next_event = event.clone();
+        next_event.turn_id = "turn-2".to_string();
+
+        let first = build_envelope(event);
+        let second = build_envelope(next_event);
+
+        assert_eq!(first.severity, "error");
         assert_eq!(first.group_key, second.group_key);
         assert_ne!(first.notification_id, second.notification_id);
     }

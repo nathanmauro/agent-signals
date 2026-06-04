@@ -8,6 +8,7 @@ It exists to close the loop on long-running agent work: kick off a task, switch 
 
 - **Native macOS notifications** via `UNUserNotificationCenter` — no third-party CLI, no per-notification process pile-up.
 - **Click-to-focus** — clicking a notification activates Ghostty and selects the originating zellij/tmux pane (and tab/window).
+- **Pane-scoped grouping** — routine turn-complete notifications replace the latest card for that pane; needs-input notifications can stack distinctly inside the same session/window/pane group.
 - **Severity-aware delivery** — `error` notifications are time-sensitive and break through Do Not Disturb; routine turn-completion and input prompts stay quiet.
 - **Audible cues** — terminal bell plus sound alongside the visual notification.
 - **Optional voice (TTS)** — speak the agent's last message aloud via local Kokoro text-to-speech.
