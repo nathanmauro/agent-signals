@@ -129,6 +129,10 @@ pub struct MuxContext {
     pub window_name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pane_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client_tty: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -238,6 +242,7 @@ pub enum WireMessage {
     Notify {
         envelope: NotifyEnvelope,
     },
+    ClearNotifications,
     Focus {
         context: String,
     },
@@ -312,6 +317,10 @@ enum SignalCommand {
     Focus {
         context: String,
     },
+    Clear {
+        #[arg(long)]
+        dry_run: bool,
+    },
     SpeakLast {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -364,6 +373,16 @@ pub fn run_agent_signal() -> i32 {
                 1
             }
         },
+        SignalCommand::Clear { dry_run } => {
+            let dry_run = cli.dry_run || dry_run;
+            match handle_clear_cli(&paths, dry_run) {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("agent-signal clear: {err}");
+                    1
+                }
+            }
+        }
         SignalCommand::SpeakLast { args } => {
             run_python_subcommand("speak-last", &args, cli.dry_run)
         }
@@ -452,6 +471,39 @@ fn handle_notify_cli(
     }
 }
 
+fn handle_clear_cli(paths: &Paths, dry_run: bool) -> io::Result<i32> {
+    if dry_run {
+        let report = clear_notification_state(paths, true)?;
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        return Ok(0);
+    }
+
+    match send_request(
+        paths,
+        &WireMessage::ClearNotifications,
+        Duration::from_millis(900),
+    ) {
+        Ok(WireMessage::Response {
+            status, message, ..
+        }) => {
+            println!("{message}");
+            if status == "cleared" {
+                Ok(0)
+            } else {
+                Ok(1)
+            }
+        }
+        Ok(_) => Ok(1),
+        Err(err) => {
+            let _ = clear_notification_state(paths, false)?;
+            println!(
+                "cleared local Agent Signals notification state; notifier unavailable ({err})"
+            );
+            Ok(1)
+        }
+    }
+}
+
 fn read_payload_arg_or_stdin(payload_arg: Option<String>) -> io::Result<String> {
     if let Some(payload) = payload_arg {
         if !payload.is_empty() {
@@ -531,7 +583,7 @@ pub fn build_envelope(event: AgentEvent) -> NotifyEnvelope {
     };
     let channels = channels_for_severity(&severity);
     let group_key = notification_group_key(&event, &payload);
-    let notification_id = sha256_hex(&group_key).chars().take(32).collect::<String>();
+    let notification_id = notification_request_id(&group_key, &key);
     NotifyEnvelope {
         event,
         payload,
@@ -629,6 +681,13 @@ fn notification_group_key(event: &AgentEvent, payload: &NotifyPayload) -> String
         _ => format!("cwd:{}", event.cwd),
     };
     format!("agent-signals:{}:{target}", event.client)
+}
+
+fn notification_request_id(group_key: &str, event_key: &str) -> String {
+    sha256_hex(&format!("{group_key}:{event_key}"))
+        .chars()
+        .take(32)
+        .collect()
 }
 
 fn extract_last_response(transcript_path: &str) -> String {
@@ -872,17 +931,21 @@ fn tmux_context() -> MuxContext {
     if pane_id.is_empty() {
         return MuxContext::default();
     }
-    let fmt = "#{session_name}\t#{session_id}\t#{window_index}\t#{window_id}\t#{window_name}\t#{pane_id}\t#{pane_title}";
+    let fmt = "#{session_name}\t#{session_id}\t#{window_index}\t#{window_id}\t#{window_name}\t#{pane_id}\t#{pane_title}\t#{client_tty}\t#{client_name}";
     let mut command = Command::new("tmux");
     command.args(["display-message", "-p", "-t", &pane_id, fmt]);
     let Ok(output) = run_output_with_timeout(command, Duration::from_secs(2)) else {
         return MuxContext::default();
     };
+    tmux_context_from_display_output(&output).unwrap_or_default()
+}
+
+fn tmux_context_from_display_output(output: &str) -> Option<MuxContext> {
     let parts = output.trim_end().split('\t').collect::<Vec<_>>();
     if parts.len() < 7 {
-        return MuxContext::default();
+        return None;
     }
-    MuxContext {
+    Some(MuxContext {
         mux_type: "tmux".to_string(),
         session: clean_text(parts[0]),
         session_id: clean_text(parts[1]),
@@ -891,8 +954,10 @@ fn tmux_context() -> MuxContext {
         window_name: clean_text(parts[4]),
         pane_id: clean_text(parts[5]),
         pane_title: clean_text(parts[6]),
+        client_tty: parts.get(7).map(clean_text).unwrap_or_default(),
+        client_name: parts.get(8).map(clean_text).unwrap_or_default(),
         ..MuxContext::default()
-    }
+    })
 }
 
 fn value_to_clean_string(value: &Value) -> String {
@@ -1154,6 +1219,45 @@ fn handle_connection(
                     notifier_connected: Some(outcome.notifier_connected),
                     authorization: None,
                     detail: None,
+                },
+            )?;
+        }
+        WireMessage::ClearNotifications => {
+            let report = clear_notification_state(&paths, false)?;
+            let notifier_ok = {
+                let mut guard = notifier.lock().unwrap();
+                let ok = if let Some(stream) = guard.as_mut() {
+                    send_json_line(stream, &WireMessage::ClearNotifications).is_ok()
+                } else {
+                    false
+                };
+                if !ok {
+                    *guard = None;
+                }
+                ok
+            };
+            if !notifier_ok {
+                notifier_status.lock().unwrap().connected = false;
+            }
+            let mut stream = stream;
+            send_json_line(
+                &mut stream,
+                &WireMessage::Response {
+                    status: if notifier_ok {
+                        "cleared".to_string()
+                    } else {
+                        "notifier_unavailable".to_string()
+                    },
+                    message: if notifier_ok {
+                        "cleared Agent Signals delivered notifications and local state".to_string()
+                    } else {
+                        "cleared local Agent Signals notification state; notifier unavailable"
+                            .to_string()
+                    },
+                    channels: None,
+                    notifier_connected: Some(notifier_ok),
+                    authorization: None,
+                    detail: Some(json!(report)),
                 },
             )?;
         }
@@ -1433,6 +1537,31 @@ struct SweepReport {
     total_removed: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClearReport {
+    active_removed: usize,
+    contexts_removed: usize,
+    spool_removed: usize,
+    total_removed: usize,
+}
+
+fn clear_notification_state(paths: &Paths, dry_run: bool) -> io::Result<ClearReport> {
+    paths.ensure()?;
+    let active_removed = load_active_index(paths).len();
+    let contexts_removed = remove_all_files(&paths.contexts_dir, dry_run)?;
+    let spool_removed = remove_all_files(&paths.spool_dir, dry_run)?;
+    if !dry_run {
+        fs::write(&paths.active_index, "{}")?;
+    }
+    let total_removed = active_removed + contexts_removed + spool_removed;
+    Ok(ClearReport {
+        active_removed,
+        contexts_removed,
+        spool_removed,
+        total_removed,
+    })
+}
+
 fn sweep_expired(paths: &Paths, dry_run: bool) -> io::Result<SweepReport> {
     paths.ensure()?;
     let cutoff = now_secs().saturating_sub(RETENTION_SECONDS);
@@ -1495,6 +1624,17 @@ fn remove_old_files(dir: &Path, cutoff: u64, dry_run: bool) -> io::Result<usize>
             if !dry_run {
                 let _ = fs::remove_file(path);
             }
+        }
+    }
+    Ok(removed)
+}
+
+fn remove_all_files(dir: &Path, dry_run: bool) -> io::Result<usize> {
+    let mut removed = 0;
+    for path in dir_files(dir)? {
+        removed += 1;
+        if !dry_run {
+            let _ = fs::remove_file(path);
         }
     }
     Ok(removed)
@@ -1656,9 +1796,11 @@ fn focus_tmux(mux: &MuxContext) -> io::Result<bool> {
 
 fn tmux_focus_commands(mux: &MuxContext) -> Vec<Command> {
     let mut commands = Vec::new();
-    if !mux.session.is_empty() {
+    let client = first_nonempty(&[&mux.client_tty, &mux.client_name]);
+    let switch_target = first_nonempty(&[&mux.window_id, &mux.session]);
+    if !client.is_empty() && !switch_target.is_empty() {
         let mut command = Command::new("tmux");
-        command.args(["switch-client", "-t", &mux.session]);
+        command.args(["switch-client", "-c", &client, "-t", &switch_target]);
         commands.push(command);
     }
     if !mux.window_id.is_empty() {
@@ -1968,6 +2110,65 @@ mod tests {
     }
 
     #[test]
+    fn same_tmux_pane_notifications_share_stack_but_keep_distinct_ids() {
+        let event = AgentEvent {
+            client: "Claude Code".to_string(),
+            thread_id: "thread".to_string(),
+            turn_id: "turn-1".to_string(),
+            cwd: "/tmp/project".to_string(),
+            mux: MuxContext {
+                mux_type: "tmux".to_string(),
+                session: "default".to_string(),
+                window_id: "@7".to_string(),
+                window_name: "opencode".to_string(),
+                pane_id: "%1039".to_string(),
+                ..MuxContext::default()
+            },
+            event_type: "Stop".to_string(),
+            transcript_path: String::new(),
+            raw: Value::Null,
+        };
+        let mut next_event = event.clone();
+        next_event.turn_id = "turn-2".to_string();
+
+        let first = build_envelope(event);
+        let second = build_envelope(next_event);
+
+        assert_eq!(
+            first.group_key,
+            "agent-signals:Claude Code:tmux:default:@7:%1039"
+        );
+        assert_eq!(first.group_key, second.group_key);
+        assert_ne!(first.notification_id, second.notification_id);
+    }
+
+    #[test]
+    fn same_tmux_session_different_panes_use_different_stack_keys() {
+        let mut event = AgentEvent {
+            client: "Claude Code".to_string(),
+            thread_id: "thread".to_string(),
+            turn_id: "turn".to_string(),
+            cwd: "/tmp/project".to_string(),
+            mux: MuxContext {
+                mux_type: "tmux".to_string(),
+                session: "default".to_string(),
+                window_id: "@7".to_string(),
+                pane_id: "%1039".to_string(),
+                ..MuxContext::default()
+            },
+            event_type: "Stop".to_string(),
+            transcript_path: String::new(),
+            raw: Value::Null,
+        };
+        let first = build_envelope(event.clone());
+        event.mux.window_id = "@8".to_string();
+        event.mux.pane_id = "%1040".to_string();
+        let second = build_envelope(event);
+
+        assert_ne!(first.group_key, second.group_key);
+    }
+
+    #[test]
     fn context_roundtrip() {
         let temp = tempdir().unwrap();
         let paths = Paths::from_state_dir(temp.path().to_path_buf());
@@ -2021,6 +2222,51 @@ mod tests {
     }
 
     #[test]
+    fn clear_notification_state_removes_active_contexts_and_spool() {
+        let temp = tempdir().unwrap();
+        let paths = Paths::from_state_dir(temp.path().to_path_buf());
+        paths.ensure().unwrap();
+        let mut active = HashMap::new();
+        active.insert(
+            "one".to_string(),
+            ActiveNotification {
+                id: "one".to_string(),
+                group_key: "group-one".to_string(),
+                updated_at: now_secs(),
+            },
+        );
+        active.insert(
+            "two".to_string(),
+            ActiveNotification {
+                id: "two".to_string(),
+                group_key: "group-two".to_string(),
+                updated_at: now_secs(),
+            },
+        );
+        fs::write(&paths.active_index, serde_json::to_vec(&active).unwrap()).unwrap();
+        fs::write(paths.contexts_dir.join("one.json"), "{}").unwrap();
+        fs::write(paths.contexts_dir.join("two.json"), "{}").unwrap();
+        fs::write(paths.spool_dir.join("pending.json"), "{}").unwrap();
+
+        let dry_run = clear_notification_state(&paths, true).unwrap();
+        assert_eq!(dry_run.active_removed, 2);
+        assert_eq!(dry_run.contexts_removed, 2);
+        assert_eq!(dry_run.spool_removed, 1);
+        assert_eq!(load_active_index(&paths).len(), 2);
+        assert_eq!(dir_files(&paths.contexts_dir).unwrap().len(), 2);
+        assert_eq!(dir_files(&paths.spool_dir).unwrap().len(), 1);
+
+        let report = clear_notification_state(&paths, false).unwrap();
+        assert_eq!(report.active_removed, 2);
+        assert_eq!(report.contexts_removed, 2);
+        assert_eq!(report.spool_removed, 1);
+        assert_eq!(report.total_removed, 5);
+        assert!(load_active_index(&paths).is_empty());
+        assert!(dir_files(&paths.contexts_dir).unwrap().is_empty());
+        assert!(dir_files(&paths.spool_dir).unwrap().is_empty());
+    }
+
+    #[test]
     fn sweep_removes_expired_files() {
         let temp = tempdir().unwrap();
         let paths = Paths::from_state_dir(temp.path().to_path_buf());
@@ -2045,10 +2291,7 @@ mod tests {
             let path = paths.dedup_dir.join(format!("{idx:08}"));
             fs::write(&path, "x").unwrap();
             let mtime = base + Duration::from_secs(idx as u64);
-            fs::File::open(&path)
-                .unwrap()
-                .set_modified(mtime)
-                .unwrap();
+            fs::File::open(&path).unwrap().set_modified(mtime).unwrap();
         }
         let removed = cap_files_by_count(&paths.dedup_dir, MAX_DEDUP_FILES, false).unwrap();
         assert_eq!(removed, extra);
@@ -2074,6 +2317,10 @@ mod tests {
             ..MuxContext::default()
         };
         assert_eq!(zellij_focus_commands(&zellij).len(), 2);
+    }
+
+    #[test]
+    fn tmux_focus_without_recorded_client_uses_window_and_pane_selectors() {
         let tmux = MuxContext {
             mux_type: "tmux".to_string(),
             session: "s".to_string(),
@@ -2081,6 +2328,54 @@ mod tests {
             pane_id: "%3".to_string(),
             ..MuxContext::default()
         };
-        assert_eq!(tmux_focus_commands(&tmux).len(), 3);
+        let commands = tmux_focus_commands(&tmux);
+        assert_eq!(commands.len(), 2);
+        assert_eq!(
+            command_args(&commands[0]),
+            vec!["select-window", "-t", "@2"]
+        );
+        assert_eq!(command_args(&commands[1]), vec!["select-pane", "-t", "%3"]);
+    }
+
+    #[test]
+    fn tmux_context_from_display_output_captures_client_fields() {
+        let output = "default\t$1\t0\t@2\twork\t%3\tcodex\t/dev/ttys007\tclient-1\n";
+        let tmux = tmux_context_from_display_output(output).unwrap();
+        assert_eq!(tmux.mux_type, "tmux");
+        assert_eq!(tmux.session, "default");
+        assert_eq!(tmux.window_id, "@2");
+        assert_eq!(tmux.pane_id, "%3");
+        assert_eq!(tmux.client_tty, "/dev/ttys007");
+        assert_eq!(tmux.client_name, "client-1");
+    }
+
+    #[test]
+    fn tmux_focus_targets_recorded_ghostty_client_when_available() {
+        let tmux: MuxContext = serde_json::from_value(json!({
+            "type": "tmux",
+            "session": "s",
+            "window_id": "@2",
+            "pane_id": "%3",
+            "client_tty": "/dev/ttys007"
+        }))
+        .unwrap();
+        let commands = tmux_focus_commands(&tmux);
+        assert_eq!(commands.len(), 3);
+        assert_eq!(
+            command_args(&commands[0]),
+            vec!["switch-client", "-c", "/dev/ttys007", "-t", "@2"]
+        );
+        assert_eq!(
+            command_args(&commands[1]),
+            vec!["select-window", "-t", "@2"]
+        );
+        assert_eq!(command_args(&commands[2]), vec!["select-pane", "-t", "%3"]);
+    }
+
+    fn command_args(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
     }
 }

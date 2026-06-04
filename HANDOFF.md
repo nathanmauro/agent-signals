@@ -56,6 +56,22 @@ Remaining:
 2. **Persistent banners (user action).** Banner-vs-Alert is a System Settings choice, not code: **System Settings → Notifications → Agent Signals Notifier → "Alerts"** to make banners stay until dismissed. Code cannot force it — `.timeSensitive` only overrides DND, and `.critical` needs an Apple entitlement an ad-hoc local build can't have.
 3. **Codex hook passes the whole payload as `--client` (real bug, found 2026-05-29).** Every captured Codex `agent-turn-complete` event in live state had its entire raw JSON payload stuffed into `event.client`, which then contaminated `group_key`/`notification_id` — so every Codex turn got a distinct JSON-shaped group key instead of a stable per-pane/per-cwd one (defeating dedup + per-pane grouping). The Rust pipeline is innocent; the fault is the Codex hook wrapper invoking `agent-signal notify --client "<raw payload>"`. Separately, `parse_hook_payload` never reads the payload's own `client` field — it relies solely on the `--client` label or the transcript-path heuristic. Fix: make the Codex hook pass a fixed label (`--client Codex`), or teach the parser to read a `client` key from the payload. Pinned by `real_codex_client_blob_regression` in the test corpus.
 
+## Deploying changes — REQUIRED after any source change or PR merge
+
+**Merging a PR does NOT make changes go live.** The runtime is compiled artifacts — `~/.local/bin/{agent-signal,agent-signald}`, `~/Applications/AgentSignalsNotifier.app`, and two launchd services — none of which a `git merge`/`git pull` touches. The repo source is not what runs.
+
+After merging a PR (or any local edit to Rust/Swift/wrapper source), run:
+
+```bash
+scripts/install-native.sh
+```
+
+It rebuilds both release binaries, reinstalls them + hook wrappers, rebuilds + reinstalls the notifier app and plists, and `launchctl kickstart -k`'s both LaunchAgents so the running daemon/notifier exec the fresh binaries. Then it runs `doctor`.
+
+- **CLI-path changes** (`agent-signal`, hook wrappers) go live as soon as the binary on disk is replaced — hooks `exec` it fresh per call, so no restart is strictly needed for those. The notify-suppression fix (PR #2) was a CLI-path change, which is why it went live from a manual rebuild without restarting anything.
+- **Daemon/notifier changes** (`agent-signald`, the Swift app) require the service restart — the running process holds the old binary in memory until `kickstart -k` cycles it.
+- Don't hand-copy individual binaries: `cargo build` produces both, and copying only `agent-signal` leaves `agent-signald` drifted (exactly what happened around PR #2 — installed daemon stayed at the May 29 build). `install-native.sh` reconciles everything in one shot.
+
 ## Commands
 
 ```bash
@@ -63,6 +79,7 @@ scripts/install-native.sh                 # build + install (bins, wrappers, app
 scripts/uninstall-native.sh               # unload LaunchAgents + remove installed artifacts
 agent-signal doctor --verbose             # health: socket, notifier, auth (+ auth remediation hint)
 agent-signal sweep --legacy --dry-run     # preview state cleanup
+agent-signal clear                        # clear delivered Agent Signals notifications + active/spooled state
 cd native/rust && cargo test              # Rust suite
 .venv/bin/python -m pytest -q             # Python TTS suite
 ```

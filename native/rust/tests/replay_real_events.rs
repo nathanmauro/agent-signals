@@ -114,7 +114,11 @@ fn replays_every_real_event_fixture() {
             "[{}] event_type",
             v.name
         );
-        assert_eq!(event.thread_id, v.expect.thread_id, "[{}] thread_id", v.name);
+        assert_eq!(
+            event.thread_id, v.expect.thread_id,
+            "[{}] thread_id",
+            v.name
+        );
         assert_eq!(event.turn_id, v.expect.turn_id, "[{}] turn_id", v.name);
         assert_eq!(event.cwd, v.expect.cwd, "[{}] cwd", v.name);
 
@@ -133,17 +137,17 @@ fn replays_every_real_event_fixture() {
         event.mux = v.inject_mux.clone().unwrap_or_default();
 
         let envelope = build_envelope(event);
-        assert_eq!(envelope.severity, v.expect.severity, "[{}] severity", v.name);
+        assert_eq!(
+            envelope.severity, v.expect.severity,
+            "[{}] severity",
+            v.name
+        );
         assert_eq!(
             envelope.group_key, v.expect.group_key,
             "[{}] group_key",
             v.name
         );
-        assert_eq!(
-            envelope.payload.title, v.expect.title,
-            "[{}] title",
-            v.name
-        );
+        assert_eq!(envelope.payload.title, v.expect.title, "[{}] title", v.name);
         assert_eq!(
             envelope.payload.subtitle, v.expect.subtitle,
             "[{}] subtitle",

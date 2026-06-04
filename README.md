@@ -134,6 +134,9 @@ agent-signal notify --client "Claude Code" '{"type":"Stop","cwd":"/path/to/proje
 # Preview a maintenance sweep, including pre-native cruft, without deleting anything
 agent-signal sweep --legacy --dry-run
 
+# Clear Agent Signals delivered notifications plus active/spooled local notification state
+agent-signal clear
+
 # Re-focus a saved pane context on demand
 agent-signal focus <context-id>
 

@@ -124,6 +124,8 @@ final class DaemonConnection {
 
         if type == "post_notification" {
             NotificationPoster.shared.post(message)
+        } else if type == "clear_notifications" {
+            NotificationPoster.shared.clearDelivered()
         }
     }
 
@@ -210,6 +212,12 @@ final class NotificationPoster: NSObject, UNUserNotificationCenterDelegate {
                 NSLog("AgentSignalsNotifier post failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    func clearDelivered() {
+        let center = UNUserNotificationCenter.current()
+        center.removeAllDeliveredNotifications()
+        center.removeAllPendingNotificationRequests()
     }
 
     func userNotificationCenter(
