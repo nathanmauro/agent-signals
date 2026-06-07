@@ -441,9 +441,24 @@ fn handle_notify_cli(
         return Ok(0);
     }
     let envelope = build_envelope(event);
+    let actionable = is_actionable(&envelope);
 
     if dry_run {
-        println!("{}", serde_json::to_string_pretty(&envelope).unwrap());
+        // Surface the verdict so `agent-signal notify --dry-run` doubles as the
+        // "would this actually notify you?" checker.
+        let mut report = serde_json::to_value(&envelope).unwrap();
+        report["would_notify"] = Value::Bool(actionable);
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        return Ok(0);
+    }
+
+    // Only actionable signals fire. A routine "responded" turn (severity
+    // `normal`) means the agent yielded but isn't blocked on you — that's
+    // "something happened", not "the turn is done and I need you" — so it
+    // produces no banner, bell, or sound. Turns that need you (a question or
+    // decision → `needs_input`, a failure → `error`) and every `Notification`
+    // event still surface.
+    if !actionable {
         return Ok(0);
     }
 
@@ -817,6 +832,21 @@ pub fn is_suppressed_turn(event: &AgentEvent) -> bool {
     looks_like_json(&last_assistant_message(event))
 }
 
+/// The signal/noise gate. Only an *actionable* turn earns a notification.
+///
+/// A turn-completion is actionable when it needs you — it asks a question or
+/// hands you a decision (`needs_input`) or reports a failure (`error`). A
+/// routine completion (`normal`) is informational: the agent finished output
+/// and yielded, but isn't blocked on you. Those are dropped wholesale — no
+/// banner, no bell, no sound — which is the bulk of the noise.
+///
+/// `Notification` events are always classified `needs_input` in
+/// `build_envelope` (they are the agent itself reporting that it is blocked or
+/// waiting), so they are never `normal` and never dropped here.
+pub fn is_actionable(envelope: &NotifyEnvelope) -> bool {
+    envelope.severity != "normal"
+}
+
 fn classify_severity(text: &str) -> String {
     if text.is_empty() {
         return "normal".to_string();
@@ -825,8 +855,12 @@ fn classify_severity(text: &str) -> String {
     if error.is_match(text) {
         return "error".to_string();
     }
+    // With routine completions silenced, this is the only path by which a
+    // turn-completion (not a `Notification` event) can reach you, so it has to
+    // catch a genuine handoff — a question or a decision kicked back to you —
+    // while staying precise enough not to re-introduce noise.
     let needs_input = Regex::new(
-        r"(?i)(\?\s*$|\b(please confirm|which one|choose|send me|tell me|do you want)\b)",
+        r"(?i)(\?\s*$|\b(please confirm|which (one|option|approach)|do you want|would you like|want me to|let me know|your call|up to you|shall i|need your (input|decision|approval|sign-?off)|waiting for your|send me|tell me|choose)\b)",
     )
     .unwrap();
     if needs_input.is_match(text) {
@@ -2107,6 +2141,140 @@ mod tests {
         }"#;
         let event = parse_hook_payload("Codex Desktop", raw).unwrap();
         assert!(!is_suppressed_turn(&event));
+    }
+
+    #[test]
+    fn routine_completion_is_not_actionable() {
+        // The 75% case: a plain "I finished" turn. Yields, but isn't blocked on
+        // you — so it must produce no signal at all.
+        let raw = r#"{
+          "type": "agent-turn-complete",
+          "thread-id": "t1",
+          "turn-id": "u1",
+          "cwd": "/tmp/project",
+          "last-assistant-message": "Created the files you asked for. Tests pass. No commit made."
+        }"#;
+        let event = parse_hook_payload("Codex", raw).unwrap();
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.severity, "normal");
+        assert!(!is_actionable(&envelope));
+    }
+
+    #[test]
+    fn routine_notify_cli_does_not_contact_daemon_or_spool() {
+        let temp = tempdir().unwrap();
+        let paths = Paths::from_state_dir(temp.path().to_path_buf());
+        paths.ensure().unwrap();
+
+        let listener = UnixListener::bind(&paths.socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_millis(300);
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let mut reader = BufReader::new(stream);
+                        let mut line = String::new();
+                        let _ = reader.read_line(&mut line);
+                        let mut stream = reader.into_inner();
+                        let response = WireMessage::Response {
+                            status: "posted".to_string(),
+                            message: "ok".to_string(),
+                            channels: Some(ChannelConfig {
+                                bell: false,
+                                sound: false,
+                                notify: false,
+                                notify_ignore_dnd: false,
+                            }),
+                            notifier_connected: None,
+                            authorization: None,
+                            detail: None,
+                        };
+                        let _ = send_json_line(&mut stream, &response);
+                        let _ = tx.send(!line.trim().is_empty());
+                        return;
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            let _ = tx.send(false);
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => {
+                        let _ = tx.send(false);
+                        return;
+                    }
+                }
+            }
+        });
+
+        let raw = r#"{
+          "type": "agent-turn-complete",
+          "thread-id": "t1",
+          "turn-id": "u1",
+          "cwd": "/tmp/project",
+          "last-assistant-message": "Implemented the change and verified tests."
+        }"#;
+        let code =
+            handle_notify_cli(&paths, "Codex".to_string(), Some(raw.to_string()), false).unwrap();
+
+        assert_eq!(code, 0);
+        assert!(!rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        server.join().unwrap();
+        assert!(dir_files(&paths.spool_dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn turn_that_asks_a_question_is_actionable() {
+        // A turn-completion that hands a decision back to you must break through
+        // even though routine completions are silenced.
+        for msg in [
+            "I can do it two ways. Which approach do you want?",
+            "Ready to apply these. Want me to proceed?",
+            "I need your decision on the auth method before continuing.",
+            "Left it staged. Let me know if you want me to commit.",
+        ] {
+            let raw = format!(
+                r#"{{"type":"agent-turn-complete","thread-id":"t","turn-id":"u","cwd":"/tmp/p","last-assistant-message":{}}}"#,
+                serde_json::to_string(msg).unwrap()
+            );
+            let event = parse_hook_payload("Codex", &raw).unwrap();
+            let envelope = build_envelope(event);
+            assert_eq!(envelope.severity, "needs_input", "msg: {msg}");
+            assert!(is_actionable(&envelope), "msg: {msg}");
+        }
+    }
+
+    #[test]
+    fn failed_turn_is_actionable() {
+        let raw = r#"{
+          "type": "agent-turn-complete",
+          "thread-id": "t1",
+          "turn-id": "u1",
+          "cwd": "/tmp/project",
+          "last-assistant-message": "The build failed: linker error, could not resolve symbol."
+        }"#;
+        let event = parse_hook_payload("Codex", raw).unwrap();
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.severity, "error");
+        assert!(is_actionable(&envelope));
+    }
+
+    #[test]
+    fn notification_event_is_always_actionable() {
+        // Permission prompts / "waiting for your input" are the agent telling
+        // you it is blocked — never silenced.
+        let raw = r#"{
+          "hook_event_name": "Notification",
+          "session_id": "s1",
+          "cwd": "/tmp/project",
+          "message": "Claude needs your permission to use Bash"
+        }"#;
+        let event = parse_hook_payload("Claude Code", raw).unwrap();
+        let envelope = build_envelope(event);
+        assert!(is_actionable(&envelope));
     }
 
     #[test]

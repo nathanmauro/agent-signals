@@ -1,18 +1,18 @@
 # Agent Signals
 
-Unified notification, voice, and focus infrastructure for AI coding agents (Claude Code, Codex) on macOS. When an agent finishes a turn — or stops to ask for input — Agent Signals fires a native macOS notification, plus a terminal bell and sound. Clicking the notification jumps you straight back to the exact terminal pane that produced it (Ghostty + zellij/tmux).
+Unified notification, voice, and focus infrastructure for AI coding agents (Claude Code, Codex) on macOS. When an agent needs input or reports a failure, Agent Signals fires a native macOS notification, plus a terminal bell and sound. Routine turn-complete events are intentionally silent. Clicking the notification jumps you straight back to the exact terminal pane that produced it (Ghostty + zellij/tmux).
 
-It exists to close the loop on long-running agent work: kick off a task, switch contexts, and get pulled back the moment the agent needs you — into the right pane, not a guessing game across a dozen splits.
+It exists to close the loop on long-running agent work: kick off a task, switch contexts, and get pulled back when the agent needs you or hit an error — into the right pane, not a guessing game across a dozen splits.
 
 ## Features
 
 - **Native macOS notifications** via `UNUserNotificationCenter` — no third-party CLI, no per-notification process pile-up.
 - **Click-to-focus** — clicking a notification activates Ghostty and selects the originating zellij/tmux pane (and tab/window).
-- **Pane-scoped grouping** — routine turn-complete notifications replace the latest card for that pane; needs-input notifications can stack distinctly inside the same session/window/pane group.
-- **Severity-aware delivery** — `error` notifications are time-sensitive and break through Do Not Disturb; routine turn-completion and input prompts stay quiet.
-- **Audible cues** — terminal bell plus sound alongside the visual notification.
+- **Pane-scoped grouping** — needs-input and error notifications group by pane; prompts can stack distinctly inside the same session/window/pane group.
+- **Severity-aware delivery** — `error` notifications are time-sensitive and break through Do Not Disturb; `needs_input` uses the default interruption level; `normal` turn completions are not delivered.
+- **Audible cues** — terminal bell plus sound alongside actionable visual notifications.
 - **Optional voice (TTS)** — speak the agent's last message aloud via local Kokoro text-to-speech.
-- **Resilient by design** — the pipeline spools events and falls back to local cues when any process is down, then drains the backlog on reconnect.
+- **Resilient by design** — the pipeline spools actionable events and falls back to local cues when any process is down, then drains the backlog on reconnect.
 - **Self-maintaining** — a long-lived daemon dedupes bursts, expires stale context, and garbage-collects its own state on a schedule.
 - **Zero-cloud** — everything runs locally over a Unix socket; no network calls, no telemetry.
 
@@ -34,7 +34,7 @@ Agent Signals is three cooperating processes connected by a Unix socket:
                                               └──────────────────────────┘
 ```
 
-**Flow.** An agent hook invokes `agent-signal notify`. The client writes one JSON line to the daemon's Unix socket at `~/.local/state/agent-signals/agent-signald.sock` and reads back an ack. The daemon (`agent-signald`) dedupes, saves the focus context, and forwards a post request to the Swift notifier, which posts the actual `UNUserNotificationCenter` notification. When you click it, the notifier calls back to the daemon, which looks up the saved context and focuses the right Ghostty window plus zellij/tmux pane.
+**Flow.** An agent hook invokes `agent-signal notify`. The client parses the hook payload and drops routine `normal` turn completions before they reach the daemon. Actionable events write one JSON line to the daemon's Unix socket at `~/.local/state/agent-signals/agent-signald.sock` and read back an ack. The daemon (`agent-signald`) dedupes, saves the focus context, and forwards a post request to the Swift notifier, which posts the actual `UNUserNotificationCenter` notification. When you click it, the notifier calls back to the daemon, which looks up the saved context and focuses the right Ghostty window plus zellij/tmux pane.
 
 **The daemon owns the durable state:**
 
@@ -44,7 +44,7 @@ Agent Signals is three cooperating processes connected by a Unix socket:
 - **Spool** — up to 128 events are queued while the notifier is unreachable, and drained automatically when it reconnects.
 - **Periodic sweep** — every 6h the daemon GCs expired contexts, stale dedup entries, and legacy state on a dedicated thread.
 
-**Resilience.** If the daemon is down, the client spools the event locally and still plays a bell and sound so you get a cue. If the notifier is down, the daemon spools and drains on reconnect. No single process failure drops a signal silently.
+**Resilience.** If the daemon is down, the client spools the actionable event locally and still plays a bell and sound so you get a cue. If the notifier is down, the daemon spools and drains on reconnect. No single process failure drops a signal silently.
 
 **Severity mapping:**
 
@@ -52,7 +52,7 @@ Agent Signals is three cooperating processes connected by a Unix socket:
 |---|---|---|
 | `error` | `.timeSensitive` | Breaks through Do Not Disturb |
 | `needs_input` | default | Routine notification |
-| `normal` | default | Routine notification |
+| `normal` | none | Dropped before daemon, banner, bell, and sound |
 
 **Why native.** This pipeline replaced a `terminal-notifier` fan-out. That approach spawned a process per notification and forced brittle `-sender` / `-execute` / `-ignoreDnD` flag juggling. The native daemon plus Swift app eliminates the process pile-up and the flag conflicts, and gives precise control over interruption levels and click handling.
 
@@ -84,7 +84,7 @@ It is idempotent — safe to re-run; existing files are overwritten in place.
 
 ### First run
 
-macOS requires you to authorize notifications once. The first notification triggers an authorization prompt for `AgentSignalsNotifier`. Until it is granted, the pipeline still completes (the daemon reports `posted`, and the bell and sound fire) but macOS suppresses the visible banner. Grant it here:
+macOS requires you to authorize notifications once. The first actionable notification triggers an authorization prompt for `AgentSignalsNotifier`. Until it is granted, the pipeline still completes (the daemon reports `posted`, and the bell and sound fire) but macOS suppresses the visible banner. Grant it here:
 
 > **System Settings → Notifications → AgentSignalsNotifier**
 
@@ -104,7 +104,7 @@ agent-signal doctor --verbose
 
 ## Hook wiring
 
-Agent Signals is driven by your agent's hooks. For Claude Code, add the `Stop` and `Notification` hooks to `~/.claude/settings.json` so both turn-completion and input prompts route through `agent-response-notify`:
+Agent Signals is driven by your agent's hooks. For Claude Code, add the `Stop` and `Notification` hooks to `~/.claude/settings.json` so turn completions and input prompts route through `agent-response-notify`:
 
 ```json
 {
@@ -119,7 +119,7 @@ Agent Signals is driven by your agent's hooks. For Claude Code, add the `Stop` a
 }
 ```
 
-`agent-response-notify` reads the hook payload on stdin and calls `agent-signal notify`, which builds the notification (title, pane subtitle, severity) and hands it to the daemon.
+`agent-response-notify` reads the hook payload on stdin and calls `agent-signal notify`, which classifies the event. Routine `normal` completions stop there; input prompts and error turns build the notification (title, pane subtitle, severity) and hand it to the daemon.
 
 ## Usage
 
