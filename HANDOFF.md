@@ -1,6 +1,6 @@
 # agent-signals — Handoff
 
-Unified notification / voice / focus infrastructure for AI coding agents (Claude Code, Codex). When an agent finishes a turn, this fires a bell + sound + native macOS notification; clicking the notification focuses the originating terminal pane.
+Unified notification / voice / focus infrastructure for AI coding agents (Claude Code, Codex). When an agent needs input or reports a failure, this fires a bell + sound + native macOS notification; clicking the notification focuses the originating terminal pane. Routine turn-complete events are silent.
 
 > **Not `agent-observatory`.** That sibling project (a Go process-monitor dashboard) had the Textual-TUI CPU runaway on 2026-05-27 that contributed to a WindowServer crash. **agent-signals has never used Textual** and is unrelated to that incident. Its daemon is a flat ~10 MB Rust process.
 
@@ -23,8 +23,8 @@ hook → agent-signal (Rust client)
 
 - The notifier runs an **AppKit `.accessory` event loop** (`NSApplication`, no Dock icon, paired with `LSUIElement`) rather than a bare Foundation `RunLoop`. This is required: macOS activates the posting app on notification click, and only a real Cocoa event loop can answer that activation and deliver the `UNUserNotificationCenterDelegate` callback in-process. With a bare RunLoop, clicks produced "AgentSignalsNotifier.app is not responding" and the click→focus path never fired (fixed 2026-05-29).
 - `speak-last` and `voice` shell out to the Python package (`python -m agent_signals.cli`). Everything else is native.
-- Native notifications replaced `terminal-notifier` — this killed the `-sender`/`-execute`/`-ignoreDnD` conflicts and the per-notification process pile-up. `error` severity → `.timeSensitive` (DND override); `needs_input` and `normal` are routine.
-- Resilience: daemon down → client spools + plays local cues itself. Notifier down → daemon spools, drains on reconnect.
+- Native notifications replaced `terminal-notifier` — this killed the `-sender`/`-execute`/`-ignoreDnD` conflicts and the per-notification process pile-up. `error` severity → `.timeSensitive` (DND override); `needs_input` is routine; `normal` is dropped before the daemon, banner, bell, and sound paths.
+- Resilience: daemon down → client spools actionable events + plays local cues itself. Notifier down → daemon spools, drains on reconnect.
 
 ## Source layout
 
@@ -37,7 +37,7 @@ hook → agent-signal (Rust client)
 - `scripts/install-native.sh` — build + install (bins, wrappers, app, plists) + load + doctor. `scripts/uninstall-native.sh` — unload + remove.
 - `README.md` — install / usage / troubleshooting.
 
-## Current status (2026-05-29)
+## Current status (2026-06-07)
 
 The native rewrite is **deployed and live** on `in8-mac`. Daemon + client + notifier all built and installed; Rust + Python suites green; repo public and pushed.
 
@@ -45,7 +45,8 @@ The native rewrite is **deployed and live** on `in8-mac`. Daemon + client + noti
 - ✅ `doctor` reports a remediation hint when notification auth is denied; on `in8-mac` it currently reports `authorized` + `notifier connected: true`.
 - ✅ README, `scripts/uninstall-native.sh`, and the `install-native.sh` bin/ wrapper install are all in place.
 - ✅ **Notification clicks work** (fixed 2026-05-29). The notifier was a bare Foundation `RunLoop` that could not answer the click-activation Apple Event, so every click produced "AgentSignalsNotifier.app is not responding" and LaunchServices spawned a dead duplicate instance. Switched to an AppKit `.accessory` event loop. This is what makes the click→focus path (the headline feature) actually fire — it had never worked on a real click before this.
-- ✅ **Codex JSON-as-client regression is fixed** (2026-06-04). The wrapper now treats a JSON first argument as the payload and defaults the client to `Codex`; `parse_hook_payload` also has the same defensive path. Routine normal turn-complete notifications now reuse the pane-scoped notification id, so they replace the latest card instead of accumulating. `needs_input` notifications still keep distinct ids so prompts can stack by session/window/pane.
+- ✅ **Codex JSON-as-client regression is fixed** (2026-06-04). The wrapper now treats a JSON first argument as the payload and defaults the client to `Codex`; `parse_hook_payload` also has the same defensive path.
+- ✅ **Routine turn-complete noise is silenced** (2026-06-07). `agent-signal notify` builds the envelope, marks `normal` completions as non-actionable, and returns before daemon send, local spool, banner, bell, or sound. `needs_input` turn completions, `Notification` hooks, and `error` turns still surface.
 
 ## Plan / open items
 
@@ -68,7 +69,7 @@ scripts/install-native.sh
 
 It rebuilds both release binaries, reinstalls them + hook wrappers, rebuilds + reinstalls the notifier app and plists, and `launchctl kickstart -k`'s both LaunchAgents so the running daemon/notifier exec the fresh binaries. Then it runs `doctor`.
 
-- **CLI-path changes** (`agent-signal`, hook wrappers) go live as soon as the binary on disk is replaced — hooks `exec` it fresh per call, so no restart is strictly needed for those. The notify-suppression fix (PR #2) was a CLI-path change, which is why it went live from a manual rebuild without restarting anything.
+- **CLI-path changes** (`agent-signal`, hook wrappers) go live as soon as the binary on disk is replaced — hooks `exec` it fresh per call, so no restart is strictly needed for those.
 - **Daemon/notifier changes** (`agent-signald`, the Swift app) require the service restart — the running process holds the old binary in memory until `kickstart -k` cycles it.
 - Don't hand-copy individual binaries: `cargo build` produces both, and copying only `agent-signal` leaves `agent-signald` drifted (exactly what happened around PR #2 — installed daemon stayed at the May 29 build). `install-native.sh` reconciles everything in one shot.
 

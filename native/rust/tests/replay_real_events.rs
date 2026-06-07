@@ -18,7 +18,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use agent_signals_native::{build_envelope, is_suppressed_turn, parse_hook_payload, MuxContext};
+use agent_signals_native::{
+    build_envelope, is_actionable, is_suppressed_turn, parse_hook_payload, MuxContext,
+};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -156,6 +158,17 @@ fn replays_every_real_event_fixture() {
         assert_eq!(
             envelope.payload.message, v.expect.message,
             "[{}] message",
+            v.name
+        );
+
+        // The signal/noise gate, asserted against every real event: a routine
+        // `normal` completion never notifies; anything that needs you
+        // (`needs_input`/`error`) does. The captured Codex `agent-turn-complete`
+        // turns are `normal` here, so they are correctly dropped.
+        assert_eq!(
+            is_actionable(&envelope),
+            v.expect.severity != "normal",
+            "[{}] actionable",
             v.name
         );
     }
