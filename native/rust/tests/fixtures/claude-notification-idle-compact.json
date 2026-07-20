@@ -1,0 +1,32 @@
+{
+  "name": "claude-notification-idle-compact",
+  "source": "synthesized from the reported false positive: idle Notification during a compaction/recap pause",
+  "note": "'Claude is waiting for your input' while the transcript's last boundary is a compact summary → dropped wholesale.",
+  "label": "Claude Code",
+  "raw": {
+    "hook_event_name": "Notification",
+    "session_id": "sess_idle_compact",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "message": "Claude is waiting for your input"
+  },
+  "transcript_jsonl": [
+    {"type": "user", "message": {"content": "Fix the parser bug"}},
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": "Working on it."}]}},
+    {"type": "user", "isCompactSummary": true, "message": {"content": "This session is being continued from a previous conversation that ran out of context. Summary: fixing the parser bug."}},
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": "Recap: the parser bug is fixed and tests pass. Would you like me to continue?"}]}}
+  ],
+  "inject_mux": null,
+  "expect": {
+    "parsed": true,
+    "client": "Claude Code",
+    "event_type": "Notification",
+    "thread_id": "sess_idle_compact",
+    "turn_id": "",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "severity": "normal",
+    "title": "Claude Code is waiting",
+    "subtitle": "agent-signals",
+    "message": "Still waiting on you — click to focus.",
+    "group_key": "agent-signals:Claude Code:cwd:/Users/nathan/Developer/proj/agent-signals"
+  }
+}

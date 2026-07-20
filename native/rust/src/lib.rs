@@ -740,10 +740,10 @@ pub fn build_envelope(event: AgentEvent) -> NotifyEnvelope {
 pub fn build_envelope_with(event: AgentEvent, rules: &SeverityRules) -> NotifyEnvelope {
     let key = event.dedup_key();
     let class = classify_event(&event, rules);
-    let payload = build_payload(&event, &key);
+    let payload = build_payload(&event, &key, &class);
     let channels = channels_for_severity(&class.severity);
     let group_key = notification_group_key(&event, &payload);
-    let notification_id = notification_request_id(&group_key, &key, &class.severity);
+    let notification_id = notification_request_id(&group_key, &class.kind, &class.severity);
     NotifyEnvelope {
         event,
         payload,
@@ -756,18 +756,11 @@ pub fn build_envelope_with(event: AgentEvent, rules: &SeverityRules) -> NotifyEn
     }
 }
 
-fn build_payload(event: &AgentEvent, key: &str) -> NotifyPayload {
-    let is_notification = event.event_type == "Notification";
-    let title = if is_notification {
-        format!("{} needs input", event.client)
-    } else {
-        format!("{} responded", event.client)
-    };
-    let mut subtitle = String::new();
-    let mut message = "Prompt response is ready.".to_string();
+fn build_payload(event: &AgentEvent, key: &str, class: &Classification) -> NotifyPayload {
     let mux = event.mux.clone();
 
-    match mux.mux_type.as_str() {
+    // Location strings shared by every template.
+    let (location, pane_label, ready_message) = match mux.mux_type.as_str() {
         "zellij" => {
             let session = if mux.session.is_empty() {
                 "zellij"
@@ -782,8 +775,11 @@ fn build_payload(event: &AgentEvent, key: &str) -> NotifyPayload {
                 "tab".to_string()
             };
             let pane_title = first_nonempty(&[&mux.pane_title, &event.cwd_name(), &mux.pane_ref]);
-            subtitle = format!("{session} / {tab}");
-            message = format!("{pane_title} ({}) is ready. Click to focus.", mux.pane_ref);
+            (
+                format!("{session} / {tab}"),
+                mux.pane_ref.clone(),
+                format!("{pane_title} ({}) is ready. Click to focus.", mux.pane_ref),
+            )
         }
         "tmux" => {
             let session = if mux.session.is_empty() {
@@ -793,28 +789,86 @@ fn build_payload(event: &AgentEvent, key: &str) -> NotifyPayload {
             };
             let window = first_nonempty(&[&mux.window_name, &mux.window_index, "window"]);
             let pane_title = first_nonempty(&[&mux.pane_title, &event.cwd_name(), &mux.pane_id]);
-            subtitle = format!("{session} / {window}");
-            message = format!("{pane_title} ({}) is ready. Click to focus.", mux.pane_id);
+            (
+                format!("{session} / {window}"),
+                mux.pane_id.clone(),
+                format!("{pane_title} ({}) is ready. Click to focus.", mux.pane_id),
+            )
         }
-        _ if !event.cwd_name().is_empty() => {
-            message = format!("{}: response is ready.", event.cwd_name());
-        }
-        _ => {}
-    }
+        _ if !event.cwd_name().is_empty() => (
+            String::new(),
+            String::new(),
+            format!("{}: response is ready.", event.cwd_name()),
+        ),
+        _ => (String::new(), String::new(), "Prompt response is ready.".to_string()),
+    };
 
-    if is_notification {
-        let hook_message = event
-            .raw
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim();
-        message = if hook_message.is_empty() {
-            "Waiting for your input. Click to focus.".to_string()
-        } else {
-            hook_message.to_string()
+    // Routine completions keep the legacy render exactly (they are dropped by
+    // is_actionable anyway; --dry-run and the replay corpus pin these bytes).
+    if class.kind == "turn" && class.severity == "normal" {
+        return NotifyPayload {
+            title: format!("{} responded", event.client),
+            subtitle: location,
+            message: ready_message,
+            key: key.to_string(),
+            mux,
         };
     }
+
+    let subtitle = if !location.is_empty() && !pane_label.is_empty() {
+        format!("{location} · {pane_label}")
+    } else if !location.is_empty() {
+        location
+    } else {
+        event.cwd_name()
+    };
+
+    let hook_message = event
+        .raw
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let (title, message) = match class.kind.as_str() {
+        "permission" => (
+            format!("{} needs permission", event.client),
+            if hook_message.is_empty() {
+                "Permission needed. Click to focus.".to_string()
+            } else {
+                hook_message
+            },
+        ),
+        "idle" => (
+            format!("{} is waiting", event.client),
+            "Still waiting on you — click to focus.".to_string(),
+        ),
+        "unknown" => (
+            format!("{} needs input", event.client),
+            if hook_message.is_empty() {
+                "Waiting for your input. Click to focus.".to_string()
+            } else {
+                hook_message
+            },
+        ),
+        // "turn" with needs_input / error severity.
+        _ => {
+            let title = if class.severity == "error" {
+                format!("{} hit an error", event.client)
+            } else {
+                format!("{} needs input", event.client)
+            };
+            let message = if !class.excerpt.is_empty() {
+                class.excerpt.clone()
+            } else if class.severity == "error" {
+                "Something failed. Click to focus.".to_string()
+            } else {
+                "Needs your input. Click to focus.".to_string()
+            };
+            (title, message)
+        }
+    };
 
     NotifyPayload {
         title,
@@ -844,13 +898,13 @@ fn notification_group_key(event: &AgentEvent, payload: &NotifyPayload) -> String
     format!("agent-signals:{}:{target}", event.client)
 }
 
-fn notification_request_id(group_key: &str, event_key: &str, severity: &str) -> String {
-    let seed = if severity == "normal" {
-        group_key.to_string()
-    } else {
-        format!("{group_key}:{event_key}")
-    };
-    sha256_hex(&seed).chars().take(32).collect()
+/// One card per (pane, kind, severity): a newer event of the same kind from
+/// the same pane replaces the delivered card instead of stacking a new one.
+fn notification_request_id(group_key: &str, kind: &str, severity: &str) -> String {
+    sha256_hex(&format!("{group_key}:{kind}:{severity}"))
+        .chars()
+        .take(32)
+        .collect()
 }
 
 fn extract_last_response(transcript_path: &str) -> String {
@@ -2331,7 +2385,7 @@ mod tests {
         assert_eq!(event.event_type, "Notification");
         let envelope = build_envelope(event);
         assert_eq!(envelope.severity, "needs_input");
-        assert!(envelope.payload.title.contains("needs input"));
+        assert_eq!(envelope.payload.title, "Claude Code needs permission");
         assert_eq!(
             envelope.payload.message,
             "Claude needs your permission to use Bash"
@@ -2564,7 +2618,7 @@ mod tests {
     }
 
     #[test]
-    fn same_tmux_pane_needs_input_notifications_stack_distinct_cards() {
+    fn same_tmux_pane_needs_input_notifications_replace_one_card() {
         let event = AgentEvent {
             client: "Claude Code".to_string(),
             thread_id: "thread".to_string(),
@@ -2580,7 +2634,7 @@ mod tests {
             },
             event_type: "Notification".to_string(),
             transcript_path: String::new(),
-            raw: json!({"message": "Permission needed"}),
+            raw: json!({"message": "Claude needs your permission to use Bash"}),
         };
         let mut next_event = event.clone();
         next_event.turn_id = "turn-2".to_string();
@@ -2589,12 +2643,14 @@ mod tests {
         let second = build_envelope(next_event);
 
         assert_eq!(first.severity, "needs_input");
+        assert_eq!(first.kind, "permission");
         assert_eq!(first.group_key, second.group_key);
-        assert_ne!(first.notification_id, second.notification_id);
+        // Repeated prompts from the same pane replace one card, never stack.
+        assert_eq!(first.notification_id, second.notification_id);
     }
 
     #[test]
-    fn codex_inline_error_message_keeps_distinct_notification_id() {
+    fn codex_inline_error_message_replaces_per_pane_card() {
         let event = AgentEvent {
             client: "Codex".to_string(),
             thread_id: "thread".to_string(),
@@ -2619,7 +2675,74 @@ mod tests {
 
         assert_eq!(first.severity, "error");
         assert_eq!(first.group_key, second.group_key);
-        assert_ne!(first.notification_id, second.notification_id);
+        assert_eq!(first.notification_id, second.notification_id);
+    }
+
+    #[test]
+    fn needs_input_body_carries_the_closing_ask() {
+        let temp = tempdir().unwrap();
+        let path = write_claude_transcript(temp.path(), "ask.jsonl", QUESTION_TRANSCRIPT);
+        let mut event = stop_event(&path);
+        event.mux = MuxContext {
+            mux_type: "zellij".to_string(),
+            session: "default".to_string(),
+            pane_ref: "terminal_19".to_string(),
+            pane_title: "agent-signals".to_string(),
+            tab_name: "signals".to_string(),
+            ..MuxContext::default()
+        };
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.payload.title, "Claude Code needs input");
+        assert_eq!(
+            envelope.payload.message,
+            "Added the scaffolding. Which auth approach do you want — JWT or sessions?"
+        );
+        assert_eq!(envelope.payload.subtitle, "default / signals · terminal_19");
+    }
+
+    #[test]
+    fn error_turn_title_and_fallback_body() {
+        let raw = r#"{
+          "type": "agent-turn-complete",
+          "thread-id": "t1",
+          "turn-id": "u1",
+          "cwd": "/tmp/project",
+          "last-assistant-message": "The build failed: linker error, could not resolve symbol."
+        }"#;
+        let mut event = parse_hook_payload("Codex", raw).unwrap();
+        event.mux = MuxContext::default();
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.payload.title, "Codex hit an error");
+        assert_eq!(
+            envelope.payload.message,
+            "The build failed: linker error, could not resolve symbol."
+        );
+        assert_eq!(envelope.payload.subtitle, "project");
+    }
+
+    #[test]
+    fn idle_notification_renders_waiting_card() {
+        let event = notification_event("Claude is waiting for your input", "");
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.payload.title, "Claude Code is waiting");
+        assert_eq!(
+            envelope.payload.message,
+            "Still waiting on you — click to focus."
+        );
+    }
+
+    #[test]
+    fn long_excerpt_is_trimmed_with_ellipsis() {
+        let long_ask = format!("{} — which one?", "option ".repeat(40));
+        let raw = format!(
+            r#"{{"type":"agent-turn-complete","thread-id":"t","turn-id":"u","cwd":"/tmp/p","last-assistant-message":{}}}"#,
+            serde_json::to_string(&long_ask).unwrap()
+        );
+        let mut event = parse_hook_payload("Codex", &raw).unwrap();
+        event.mux = MuxContext::default();
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.payload.message.chars().count(), 140);
+        assert!(envelope.payload.message.ends_with('…'));
     }
 
     #[test]

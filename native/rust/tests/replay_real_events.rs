@@ -31,6 +31,8 @@ struct Vector {
     raw: Value,
     #[serde(default)]
     inject_mux: Option<MuxContext>,
+    #[serde(default)]
+    transcript_jsonl: Option<Vec<Value>>,
     expect: Expect,
 }
 
@@ -89,12 +91,34 @@ fn load_vectors() -> Vec<Vector> {
 fn replays_every_real_event_fixture() {
     let vectors = load_vectors();
     assert!(
-        vectors.len() >= 8,
+        vectors.len() >= 11,
         "expected the real-event fixture corpus, found only {}",
         vectors.len()
     );
 
     for v in vectors {
+        // A fixture may carry its transcript inline; write it under a `.claude`
+        // path so the Claude transcript branch triggers, and point the payload
+        // at it.
+        let _transcript_dir; // keep tempdir alive for the vector's lifetime
+        let mut v = v;
+        if let Some(lines) = v.transcript_jsonl.take() {
+            let dir = tempfile::tempdir().unwrap();
+            let claude_dir = dir.path().join(".claude/projects/replay");
+            fs::create_dir_all(&claude_dir).unwrap();
+            let path = claude_dir.join("transcript.jsonl");
+            let text = lines
+                .iter()
+                .map(|l| serde_json::to_string(l).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n");
+            fs::write(&path, text).unwrap();
+            v.raw["transcript_path"] = Value::String(path.to_string_lossy().into_owned());
+            _transcript_dir = Some(dir);
+        } else {
+            _transcript_dir = None;
+        }
+
         let raw = serde_json::to_string(&v.raw).unwrap();
         let parsed = parse_hook_payload(&v.label, &raw);
 

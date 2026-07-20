@@ -1,0 +1,31 @@
+{
+  "name": "claude-stop-question",
+  "source": "synthesized: Stop on a genuine closing question",
+  "note": "The one turn-completion shape that must still notify, with the ask in the body.",
+  "label": "Claude Code",
+  "raw": {
+    "type": "Stop",
+    "hook_event_name": "Stop",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "thread-id": "thread_q",
+    "turn-id": "turn_q"
+  },
+  "transcript_jsonl": [
+    {"type": "user", "message": {"content": "Add auth"}},
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": "Added the scaffolding. Which auth approach do you want — JWT or sessions?"}]}}
+  ],
+  "inject_mux": null,
+  "expect": {
+    "parsed": true,
+    "client": "Claude Code",
+    "event_type": "Stop",
+    "thread_id": "thread_q",
+    "turn_id": "turn_q",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "severity": "needs_input",
+    "title": "Claude Code needs input",
+    "subtitle": "agent-signals",
+    "message": "Added the scaffolding. Which auth approach do you want — JWT or sessions?",
+    "group_key": "agent-signals:Claude Code:cwd:/Users/nathan/Developer/proj/agent-signals"
+  }
+}

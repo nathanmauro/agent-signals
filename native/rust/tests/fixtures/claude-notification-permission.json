@@ -28,8 +28,8 @@
     "turn_id": "",
     "cwd": "/Users/nathan/Developer/proj/agent-signals",
     "severity": "needs_input",
-    "title": "Claude Code needs input",
-    "subtitle": "default / signals",
+    "title": "Claude Code needs permission",
+    "subtitle": "default / signals · terminal_4",
     "message": "Claude needs your permission",
     "group_key": "agent-signals:Claude Code:zellij:default:terminal_4"
   }

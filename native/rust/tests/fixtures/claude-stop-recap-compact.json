@@ -1,0 +1,33 @@
+{
+  "name": "claude-stop-recap-compact",
+  "source": "synthesized from the recap false-positive: Stop firing on a post-compaction recap turn",
+  "note": "The recap text is question-shaped ('Would you like me to continue?') — the old classifier turned this into needs_input. The compact boundary must drop it.",
+  "label": "Claude Code",
+  "raw": {
+    "type": "Stop",
+    "hook_event_name": "Stop",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "thread-id": "thread_recap",
+    "turn-id": "turn_recap"
+  },
+  "transcript_jsonl": [
+    {"type": "user", "message": {"content": "Fix the parser bug"}},
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": "Working on it."}]}},
+    {"type": "user", "isCompactSummary": true, "message": {"content": "This session is being continued from a previous conversation that ran out of context. Summary: fixing the parser bug."}},
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": "Recap: the parser bug is fixed and tests pass. Would you like me to continue?"}]}}
+  ],
+  "inject_mux": null,
+  "expect": {
+    "parsed": true,
+    "client": "Claude Code",
+    "event_type": "Stop",
+    "thread_id": "thread_recap",
+    "turn_id": "turn_recap",
+    "cwd": "/Users/nathan/Developer/proj/agent-signals",
+    "severity": "normal",
+    "title": "Claude Code responded",
+    "subtitle": "",
+    "message": "agent-signals: response is ready.",
+    "group_key": "agent-signals:Claude Code:cwd:/Users/nathan/Developer/proj/agent-signals"
+  }
+}

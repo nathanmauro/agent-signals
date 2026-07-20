@@ -28,9 +28,9 @@
     "turn_id": "",
     "cwd": "/Users/nathan/Developer/proj/sba-agentic",
     "severity": "needs_input",
-    "title": "Claude Code needs input",
-    "subtitle": "default / sba-agentic",
-    "message": "Claude is waiting for your input",
+    "title": "Claude Code is waiting",
+    "subtitle": "default / sba-agentic · terminal_19",
+    "message": "Still waiting on you — click to focus.",
     "group_key": "agent-signals:Claude Code:zellij:default:terminal_19"
   }
 }
