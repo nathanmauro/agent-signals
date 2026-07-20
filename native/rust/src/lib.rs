@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wait_timeout::ChildExt;
 
 pub mod rules;
+pub mod transcript;
 
 use rules::SeverityRules;
 
