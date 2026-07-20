@@ -235,10 +235,16 @@ pub struct NotifyEnvelope {
     pub event: AgentEvent,
     pub payload: NotifyPayload,
     pub severity: String,
+    #[serde(default = "default_kind")]
+    pub kind: String,
     pub channels: ChannelConfig,
     pub group_key: String,
     pub notification_id: String,
     pub created_at: u64,
+}
+
+fn default_kind() -> String {
+    "turn".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -445,7 +451,8 @@ fn handle_notify_cli(
     if is_suppressed_turn(&event) {
         return Ok(0);
     }
-    let envelope = build_envelope(event);
+    let rules = SeverityRules::load();
+    let envelope = build_envelope_with(event, &rules);
     let actionable = is_actionable(&envelope);
 
     if dry_run {
@@ -606,21 +613,142 @@ fn string_field(data: &Value, keys: &[&str]) -> String {
         .to_string()
 }
 
-pub fn build_envelope(event: AgentEvent) -> NotifyEnvelope {
-    let key = event.dedup_key();
-    let payload = build_payload(&event, &key);
-    let severity = if event.event_type == "Notification" {
-        "needs_input".to_string()
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Classification {
+    pub severity: String,
+    pub kind: String,
+    /// Closing excerpt of the assistant text, for the notification body.
+    pub excerpt: String,
+}
+
+/// Triage for `Notification` hook events. Claude Code sends this hook for
+/// permission prompts AND idle "waiting for your input" reminders — only the
+/// former is unconditionally urgent. Idle reminders are dropped when the
+/// transcript shows the turn is not actually waiting on the user: a compact
+/// summary boundary (recap in progress) or an in-flight tool-using turn.
+fn classify_notification(event: &AgentEvent, rules: &SeverityRules) -> Classification {
+    let message = event
+        .raw
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let lowered = message.to_lowercase();
+    if lowered.contains("permission") {
+        return Classification {
+            severity: "needs_input".to_string(),
+            kind: "permission".to_string(),
+            excerpt: String::new(),
+        };
+    }
+    if lowered.contains("waiting for your input") {
+        if event.transcript_path.contains(".claude") {
+            if let Ok(text) = fs::read_to_string(&event.transcript_path) {
+                let turn = transcript::read_claude_turn(&text);
+                if turn.boundary_is_compact || turn.in_flight {
+                    return Classification {
+                        severity: "normal".to_string(),
+                        kind: "idle".to_string(),
+                        excerpt: String::new(),
+                    };
+                }
+            }
+        }
+        return Classification {
+            severity: "needs_input".to_string(),
+            kind: "idle".to_string(),
+            excerpt: String::new(),
+        };
+    }
+    let _ = rules;
+    Classification {
+        severity: "needs_input".to_string(),
+        kind: "unknown".to_string(),
+        excerpt: String::new(),
+    }
+}
+
+fn classify_event(event: &AgentEvent, rules: &SeverityRules) -> Classification {
+    if event.event_type == "Notification" {
+        return classify_notification(event, rules);
+    }
+    // Turn completion. Claude Code: read the transcript compaction-aware;
+    // Codex: the final text arrives inline on the payload.
+    let inline = event
+        .raw
+        .get("last-assistant-message")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    let text = if !inline.is_empty() {
+        inline.to_string()
+    } else if event.transcript_path.contains(".claude") {
+        match fs::read_to_string(&event.transcript_path) {
+            Ok(content) => {
+                let turn = transcript::read_claude_turn(&content);
+                if turn.boundary_is_compact {
+                    // A Stop whose turn starts at a compact summary is the
+                    // recap false-positive; never notify on it.
+                    return Classification {
+                        severity: "normal".to_string(),
+                        kind: "turn".to_string(),
+                        excerpt: String::new(),
+                    };
+                }
+                turn.text
+            }
+            Err(_) => String::new(),
+        }
     } else {
-        classify_severity(&last_assistant_message(&event))
+        extract_last_response(&event.transcript_path)
     };
-    let channels = channels_for_severity(&severity);
+    let severity = rules.classify(&text);
+    let excerpt = if severity == "normal" {
+        String::new()
+    } else {
+        closing_excerpt(&text, 140)
+    };
+    Classification {
+        severity,
+        kind: "turn".to_string(),
+        excerpt,
+    }
+}
+
+/// The last non-empty line of the message, trimmed to `max_chars` — the
+/// closing ask/error a banner can actually show.
+fn closing_excerpt(text: &str, max_chars: usize) -> String {
+    let last_line = text
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    let cleaned = clean_text(last_line);
+    if cleaned.chars().count() <= max_chars {
+        return cleaned;
+    }
+    let mut out = cleaned.chars().take(max_chars - 1).collect::<String>();
+    out.push('…');
+    out
+}
+
+pub fn build_envelope(event: AgentEvent) -> NotifyEnvelope {
+    build_envelope_with(event, SeverityRules::compiled_default())
+}
+
+pub fn build_envelope_with(event: AgentEvent, rules: &SeverityRules) -> NotifyEnvelope {
+    let key = event.dedup_key();
+    let class = classify_event(&event, rules);
+    let payload = build_payload(&event, &key);
+    let channels = channels_for_severity(&class.severity);
     let group_key = notification_group_key(&event, &payload);
-    let notification_id = notification_request_id(&group_key, &key, &severity);
+    let notification_id = notification_request_id(&group_key, &key, &class.severity);
     NotifyEnvelope {
         event,
         payload,
-        severity,
+        severity: class.severity,
+        kind: class.kind,
         channels,
         group_key,
         notification_id,
@@ -845,15 +973,12 @@ pub fn is_suppressed_turn(event: &AgentEvent) -> bool {
 /// and yielded, but isn't blocked on you. Those are dropped wholesale — no
 /// banner, no bell, no sound — which is the bulk of the noise.
 ///
-/// `Notification` events are always classified `needs_input` in
-/// `build_envelope` (they are the agent itself reporting that it is blocked or
-/// waiting), so they are never `normal` and never dropped here.
+/// `Notification` events are classified by `classify_event`: permission
+/// prompts and genuinely idle turns are `needs_input`, but an idle reminder
+/// that lands mid-compact or mid-turn is triaged down to `normal` and dropped
+/// here same as a routine turn completion.
 pub fn is_actionable(envelope: &NotifyEnvelope) -> bool {
     envelope.severity != "normal"
-}
-
-fn classify_severity(text: &str) -> String {
-    SeverityRules::compiled_default().classify(text)
 }
 
 fn channels_for_severity(severity: &str) -> ChannelConfig {
@@ -2045,6 +2170,116 @@ fn run_python_subcommand(subcommand: &str, args: &[String], dry_run: bool) -> i3
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn write_claude_transcript(dir: &std::path::Path, name: &str, jsonl: &str) -> String {
+        let claude_dir = dir.join(".claude/projects/example");
+        fs::create_dir_all(&claude_dir).unwrap();
+        let path = claude_dir.join(name);
+        fs::write(&path, jsonl).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    const RECAP_TRANSCRIPT: &str = r#"{"type":"user","message":{"content":"Fix the bug"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Working on it."}]}}
+{"type":"user","isCompactSummary":true,"message":{"content":"This session is being continued from a previous conversation. Summary: fixing the bug."}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Recap: fixed the null check. Would you like me to continue?"}]}}"#;
+
+    const QUESTION_TRANSCRIPT: &str = r#"{"type":"user","message":{"content":"Add auth"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Added the scaffolding. Which auth approach do you want — JWT or sessions?"}]}}"#;
+
+    fn stop_event(transcript_path: &str) -> AgentEvent {
+        let raw = format!(
+            r#"{{"type":"Stop","hook_event_name":"Stop","transcript_path":{},"cwd":"/tmp/project","thread-id":"t1","turn-id":"u1"}}"#,
+            serde_json::to_string(transcript_path).unwrap()
+        );
+        let mut event = parse_hook_payload("Claude Code", &raw).unwrap();
+        event.mux = MuxContext::default();
+        event
+    }
+
+    fn notification_event(message: &str, transcript_path: &str) -> AgentEvent {
+        let raw = format!(
+            r#"{{"hook_event_name":"Notification","session_id":"s1","cwd":"/tmp/project","message":{},"transcript_path":{}}}"#,
+            serde_json::to_string(message).unwrap(),
+            serde_json::to_string(transcript_path).unwrap()
+        );
+        let mut event = parse_hook_payload("Claude Code", &raw).unwrap();
+        event.mux = MuxContext::default();
+        event
+    }
+
+    #[test]
+    fn stop_at_compact_boundary_is_dropped() {
+        // The recap text is question-shaped — exactly the old false positive —
+        // but the compact boundary must drop it wholesale.
+        let temp = tempdir().unwrap();
+        let path = write_claude_transcript(temp.path(), "recap.jsonl", RECAP_TRANSCRIPT);
+        let envelope = build_envelope(stop_event(&path));
+        assert_eq!(envelope.severity, "normal");
+        assert_eq!(envelope.kind, "turn");
+        assert!(!is_actionable(&envelope));
+    }
+
+    #[test]
+    fn stop_with_closing_question_is_needs_input_turn() {
+        let temp = tempdir().unwrap();
+        let path = write_claude_transcript(temp.path(), "question.jsonl", QUESTION_TRANSCRIPT);
+        let envelope = build_envelope(stop_event(&path));
+        assert_eq!(envelope.severity, "needs_input");
+        assert_eq!(envelope.kind, "turn");
+        assert!(is_actionable(&envelope));
+    }
+
+    #[test]
+    fn permission_notification_is_permission_kind() {
+        let event = notification_event("Claude needs your permission to use Bash", "");
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.severity, "needs_input");
+        assert_eq!(envelope.kind, "permission");
+        assert!(is_actionable(&envelope));
+    }
+
+    #[test]
+    fn idle_notification_after_compact_is_dropped() {
+        // The false "Claude wants input right after a recap": idle Notification
+        // while the transcript's last boundary is a compact summary.
+        let temp = tempdir().unwrap();
+        let path = write_claude_transcript(temp.path(), "recap2.jsonl", RECAP_TRANSCRIPT);
+        let event = notification_event("Claude is waiting for your input", &path);
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.severity, "normal");
+        assert_eq!(envelope.kind, "idle");
+        assert!(!is_actionable(&envelope));
+    }
+
+    #[test]
+    fn idle_notification_mid_turn_is_dropped() {
+        let temp = tempdir().unwrap();
+        let in_flight = r#"{"type":"user","message":{"content":"Fix"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}"#;
+        let path = write_claude_transcript(temp.path(), "inflight.jsonl", in_flight);
+        let event = notification_event("Claude is waiting for your input", &path);
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.severity, "normal");
+        assert!(!is_actionable(&envelope));
+    }
+
+    #[test]
+    fn idle_notification_without_transcript_survives_as_idle() {
+        // Fail-soft: cannot inspect the transcript → still show a banner.
+        let event = notification_event("Claude is waiting for your input", "");
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.severity, "needs_input");
+        assert_eq!(envelope.kind, "idle");
+    }
+
+    #[test]
+    fn unknown_notification_survives_as_unknown_kind() {
+        let event = notification_event("Some new hook message", "");
+        let envelope = build_envelope(event);
+        assert_eq!(envelope.severity, "needs_input");
+        assert_eq!(envelope.kind, "unknown");
+    }
 
     #[test]
     fn parse_claude_stop_payload() {
