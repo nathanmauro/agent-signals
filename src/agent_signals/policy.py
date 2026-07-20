@@ -2,29 +2,54 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 from agent_signals.config import ChannelConfig, PolicyConfig, VoiceConfig, VoiceRule
 from agent_signals.models import AgentEvent, Severity
 
-ERROR_PATTERNS = [
-    r"(?i)\b(blocked|failed|failure|error|traceback|exception|permission denied|unable to|could not|can't)\b",
+_FALLBACK_RULES: dict = {
+    "closing_window_chars": 300,
+    "needs_input_patterns": [
+        r"\?\s*$",
+        r"(?i)\b(please confirm|which (one|option|approach)|do you want|would you like|want me to|shall i|need your (input|decision|approval|sign-?off)|waiting for your|your call|up to you|let me know)\b",
+    ],
+    "error_patterns": [
+        r"(?i)\b(failed|failure|error|traceback|exception|permission denied|fatal)\b",
+    ],
+}
+_RULES_PATHS = [
+    Path.home() / ".config" / "agent-signals" / "severity-rules.json",
+    Path(__file__).resolve().parents[2] / "config" / "severity-rules.json",
 ]
-NEEDS_INPUT_PATTERNS = [
-    r"\?\s*$",
-    r"(?i)\b(please confirm|which one|choose|send me|tell me|do you want)\b",
-]
+
+
+def _load_severity_rules() -> dict:
+    for path in _RULES_PATHS:
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            continue
+        if isinstance(data, dict) and data.get("needs_input_patterns"):
+            return {
+                "closing_window_chars": int(data.get("closing_window_chars", 300)),
+                "needs_input_patterns": list(data.get("needs_input_patterns", [])),
+                "error_patterns": list(data.get("error_patterns", [])),
+            }
+    return _FALLBACK_RULES
 
 
 def classify_severity(text: str) -> str:
-    for pattern in ERROR_PATTERNS:
+    rules = _load_severity_rules()
+    window = text.strip()[-rules["closing_window_chars"]:]
+    for pattern in rules["error_patterns"]:
         try:
-            if re.search(pattern, text):
+            if re.search(pattern, window):
                 return Severity.ERROR
         except re.error:
             continue
-    for pattern in NEEDS_INPUT_PATTERNS:
+    for pattern in rules["needs_input_patterns"]:
         try:
-            if re.search(pattern, text):
+            if re.search(pattern, window):
                 return Severity.NEEDS_INPUT
         except re.error:
             continue

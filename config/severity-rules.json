@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "closing_window_chars": 300,
+  "needs_input_patterns": [
+    "\\?\\s*$",
+    "(?i)\\b(please confirm|which (one|option|approach)|do you want|would you like|want me to|shall i|need your (input|decision|approval|sign-?off)|waiting for your|your call|up to you|let me know)\\b"
+  ],
+  "error_patterns": [
+    "(?i)\\b(failed|failure|error|traceback|exception|permission denied|fatal)\\b"
+  ]
+}

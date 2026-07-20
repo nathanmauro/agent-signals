@@ -10,7 +10,7 @@
     {
       "name": "needs_attention",
       "patterns": [
-        "(?i)\\b(blocked|failed|failure|error|traceback|exception|permission denied|unable to|could not|can't)\\b"
+        "(?i)\\b(failed|failure|error|traceback|exception|permission denied|fatal)\\b"
       ],
       "voice": "af_bella",
       "speed": "0.9",
@@ -21,7 +21,7 @@
       "name": "needs_input",
       "patterns": [
         "\\?\\s*$",
-        "(?i)\\b(please confirm|which one|choose|send me|tell me|do you want)\\b"
+        "(?i)\\b(please confirm|which (one|option|approach)|do you want|would you like|want me to|shall i|need your (input|decision|approval|sign-?off)|waiting for your|your call|up to you|let me know)\\b"
       ],
       "voice": "af_bella",
       "speed": "0.95",

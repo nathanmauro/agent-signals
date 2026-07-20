@@ -73,3 +73,27 @@ def test_classify_voice_rule_code():
     config = VoiceConfig.load(Path(__file__).parent.parent / "config" / "voice-rules.json")
     rule = classify_voice_rule("Here's the change:\n```python\nprint('hi')\n```", config)
     assert rule.name == "code_or_patch"
+
+
+def test_severity_rules_file_is_the_source():
+    from agent_signals.policy import _load_severity_rules
+
+    rules = _load_severity_rules()
+    assert rules["closing_window_chars"] == 300
+    assert any("please confirm" in p for p in rules["needs_input_patterns"])
+
+
+def test_benign_prose_is_not_an_error():
+    # "could not" / "can't" / "unable to" / "blocked" are pruned from error.
+    assert classify_severity("The old approach could not scale, so I rewrote it.") == "normal"
+    assert classify_severity("I can't say this is elegant, but it works and tests pass.") == "normal"
+
+
+def test_needs_input_must_be_in_the_closing_window():
+    body = "Do you want the long version? I went ahead with the short one.\n" + ("Details of the change. " * 40)
+    assert classify_severity(body) == "normal"
+
+
+def test_closing_question_still_classifies():
+    body = ("Context paragraph. " * 40) + "\nWhich approach do you want — JWT or sessions?"
+    assert classify_severity(body) == "needs_input"
