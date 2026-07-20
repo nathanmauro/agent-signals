@@ -1,0 +1,6 @@
+{"type":"user","message":{"content":"Refactor the parser"}}
+{"type":"assistant","uuid":"resp_020","message":{"content":[{"type":"text","text":"Refactor complete. All 12 tests pass."}]}}
+{"type":"user","isCompactSummary":true,"message":{"content":"This session is being continued from a previous conversation that ran out of context. Summary: refactoring the parser. Would you like me to continue?"}}
+{"type":"assistant","uuid":"resp_021","message":{"content":[{"type":"text","text":"Continuing after compaction. The refactor is done and tests pass."}]}}
+{"type":"user","message":{"content":"<command-name>/say</command-name>\n<command-message>say</command-message>\n<command-args>--previous</command-args>"}}
+{"type":"assistant","uuid":"resp_022","message":{"content":[{"type":"text","text":"Reading the last turn aloud."}]}}

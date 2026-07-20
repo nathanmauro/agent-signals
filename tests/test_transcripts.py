@@ -49,3 +49,24 @@ def test_previous_turn_empty_file(tmp_path: Path):
     empty.write_text("")
     text, key = extract_previous_turn_from_claude(empty)
     assert text == ""
+
+
+def test_compact_summary_is_not_a_user_prompt():
+    from agent_signals.transcripts.claude import _is_turn_boundary, _user_prompt_text
+
+    compact = {
+        "type": "user",
+        "isCompactSummary": True,
+        "message": {"content": "This session is being continued. Would you like me to continue?"},
+    }
+    assert _user_prompt_text(compact) is None
+    assert _is_turn_boundary(compact)
+
+
+def test_previous_turn_skips_compact_summary_prompt():
+    from agent_signals.transcripts.claude import extract_previous_turn_from_claude
+
+    path = FIXTURES / "claude_transcript_compact.jsonl"
+    text, key = extract_previous_turn_from_claude(path)
+    assert text == "Continuing after compaction. The refactor is done and tests pass."
+    assert key == "resp_021"

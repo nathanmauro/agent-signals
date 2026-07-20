@@ -19,7 +19,7 @@ def _assistant_text(obj: dict) -> str:
 
 def _user_prompt_text(obj: dict) -> str | None:
     """Return prompt text for a real user turn, None for tool results / meta noise."""
-    if obj.get("type") != "user" or obj.get("isMeta"):
+    if obj.get("type") != "user" or obj.get("isMeta") or obj.get("isCompactSummary"):
         return None
     msg = obj.get("message")
     if not isinstance(msg, dict):
@@ -39,6 +39,14 @@ def _user_prompt_text(obj: dict) -> str | None:
         joined = "\n".join(texts)
         return joined if joined.strip() else None
     return None
+
+
+def _is_turn_boundary(obj: dict) -> bool:
+    """A compact summary starts a new logical stretch even though it is not a
+    real prompt; a real user prompt always does."""
+    if obj.get("type") == "user" and obj.get("isCompactSummary"):
+        return True
+    return _user_prompt_text(obj) is not None
 
 
 def extract_previous_turn_from_claude(path: Path) -> tuple[str, str]:
@@ -68,7 +76,7 @@ def extract_previous_turn_from_claude(path: Path) -> tuple[str, str]:
     # Boundary: the most recent real user prompt starts the in-flight turn.
     boundary = len(objs)
     for i in range(len(objs) - 1, -1, -1):
-        if _user_prompt_text(objs[i]) is not None:
+        if _is_turn_boundary(objs[i]):
             boundary = i
             break
 
