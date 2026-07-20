@@ -143,6 +143,10 @@ agent-signal focus <context-id>
 
 # Toggle / inspect local Kokoro voice playback
 agent-signal voice
+
+# Speak the last completed turn on demand, even when voice is toggled off
+# (--previous skips the in-flight turn; used by the /say Claude Code command)
+agent-signal speak-last --force --previous <transcript.jsonl>
 ```
 
 `--dry-run` is available globally; run `agent-signal --help` for the full list. The `voice` and `speak-last` subcommands shell out to the Python TTS package.

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_signals.transcripts.claude import extract_text_from_claude
+from agent_signals.transcripts.claude import (
+    extract_previous_turn_from_claude,
+    extract_text_from_claude,
+)
 from agent_signals.transcripts.codex import extract_text_from_codex
 
 
@@ -14,6 +17,18 @@ def _latest(pattern: str) -> Path | None:
         return max(files, key=lambda p: p.stat().st_mtime)
     except Exception:
         return None
+
+
+def extract_previous_turn_response(transcript_path: str) -> tuple[str, str]:
+    """Final assistant text of the last *completed* turn (Claude transcripts only).
+
+    Unlike extract_last_response, this skips the in-flight turn, so it is safe
+    to call from a tool running inside an active turn (e.g. the /say command).
+    """
+    path = Path(transcript_path).expanduser() if transcript_path else None
+    if path and path.exists() and ".claude" in path.parts:
+        return extract_previous_turn_from_claude(path)
+    return extract_last_response(transcript_path)
 
 
 def extract_last_response(transcript_path: str = "") -> tuple[str, str]:

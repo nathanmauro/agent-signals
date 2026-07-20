@@ -84,11 +84,12 @@ def cmd_speak_last(args: argparse.Namespace) -> None:
     from agent_signals.state import VoiceState
     voice_state = VoiceState()
 
-    if not args.dry_run and not voice_state.enabled:
+    force = getattr(args, "force", False)
+    if not args.dry_run and not force and not voice_state.enabled:
         return
 
-    transcript_path = ""
-    if payload_str.strip():
+    transcript_path = getattr(args, "transcript", "") or ""
+    if not transcript_path and payload_str.strip():
         import json
         try:
             data = json.loads(payload_str)
@@ -102,8 +103,12 @@ def cmd_speak_last(args: argparse.Namespace) -> None:
         except Exception:
             pass
 
-    from agent_signals.transcripts import extract_last_response
-    text, key = extract_last_response(transcript_path)
+    if getattr(args, "previous", False):
+        from agent_signals.transcripts import extract_previous_turn_response
+        text, key = extract_previous_turn_response(transcript_path)
+    else:
+        from agent_signals.transcripts import extract_last_response
+        text, key = extract_last_response(transcript_path)
     if not text:
         return
 
@@ -135,7 +140,7 @@ def cmd_speak_last(args: argparse.Namespace) -> None:
         }))
         return
 
-    if voice_state.is_duplicate_key(key):
+    if not force and voice_state.is_duplicate_key(key):
         return
     voice_state.save_last_key(key)
 
@@ -228,6 +233,9 @@ def main() -> None:
     p_focus.set_defaults(func=cmd_focus)
 
     p_speak = sub.add_parser("speak-last", help="Speak last assistant response via TTS")
+    p_speak.add_argument("transcript", nargs="?", default="", help="Explicit transcript path (otherwise read from hook stdin JSON)")
+    p_speak.add_argument("--force", action="store_true", help="Speak even when voice is toggled off; ignore duplicate suppression")
+    p_speak.add_argument("--previous", action="store_true", help="Speak the last completed turn, skipping the in-flight turn (for on-demand /say)")
     p_speak.set_defaults(func=cmd_speak_last)
 
     p_voice = sub.add_parser("voice", help="Control voice playback state")
