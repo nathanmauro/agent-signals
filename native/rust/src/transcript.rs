@@ -38,7 +38,7 @@ pub fn read_claude_turn(transcript_text: &str) -> ClaudeTurn {
         }
     }
 
-    let in_flight = objs
+    let in_flight = objs[after..]
         .iter()
         .rev()
         .find(|obj| !is_skippable(obj))
@@ -77,6 +77,7 @@ fn user_prompt_text(obj: &Value) -> Option<String> {
     if obj.get("type").and_then(Value::as_str) != Some("user")
         || flag(obj, "isMeta")
         || flag(obj, "isCompactSummary")
+        || flag(obj, "isSidechain")
     {
         return None;
     }
@@ -189,6 +190,31 @@ mod tests {
     fn empty_transcript_is_in_flight_with_no_text() {
         let turn = read_claude_turn("");
         assert_eq!(turn.text, "");
+        assert!(turn.in_flight);
+    }
+
+    #[test]
+    fn sidechain_user_prompt_is_not_a_boundary() {
+        // A subagent dispatch writes a user-typed entry with isSidechain:true;
+        // it must not shadow the real completed answer before it.
+        let text = r#"{"type":"user","message":{"content":"Real question"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Here's the complete answer to your question."}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Task","input":{}}]}}
+{"type":"user","isSidechain":true,"message":{"content":"Verify the above claims..."}}
+{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Verification subagent thinking..."}]}}"#;
+        let turn = read_claude_turn(text);
+        assert_eq!(turn.text, "Here's the complete answer to your question.");
+        assert!(!turn.boundary_is_compact);
+    }
+
+    #[test]
+    fn transcript_ending_at_compact_boundary_is_in_flight_with_no_text() {
+        let text = r#"{"type":"user","message":{"content":"Fix the bug"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Working on it."}]}}
+{"type":"user","isCompactSummary":true,"message":{"content":"This session is being continued. Would you like me to continue?"}}"#;
+        let turn = read_claude_turn(text);
+        assert_eq!(turn.text, "");
+        assert!(turn.boundary_is_compact);
         assert!(turn.in_flight);
     }
 }
