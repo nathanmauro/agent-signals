@@ -16,6 +16,10 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wait_timeout::ChildExt;
 
+pub mod rules;
+
+use rules::SeverityRules;
+
 const DEDUP_SECONDS: u64 = 20;
 const RETENTION_SECONDS: u64 = 24 * 60 * 60;
 const MAX_SPOOL_FILES: usize = 128;
@@ -848,25 +852,7 @@ pub fn is_actionable(envelope: &NotifyEnvelope) -> bool {
 }
 
 fn classify_severity(text: &str) -> String {
-    if text.is_empty() {
-        return "normal".to_string();
-    }
-    let error = Regex::new(r"(?i)\b(blocked|failed|failure|error|traceback|exception|permission denied|unable to|could not|can't)\b").unwrap();
-    if error.is_match(text) {
-        return "error".to_string();
-    }
-    // With routine completions silenced, this is the only path by which a
-    // turn-completion (not a `Notification` event) can reach you, so it has to
-    // catch a genuine handoff — a question or a decision kicked back to you —
-    // while staying precise enough not to re-introduce noise.
-    let needs_input = Regex::new(
-        r"(?i)(\?\s*$|\b(please confirm|which (one|option|approach)|do you want|would you like|want me to|let me know|your call|up to you|shall i|need your (input|decision|approval|sign-?off)|waiting for your|send me|tell me|choose)\b)",
-    )
-    .unwrap();
-    if needs_input.is_match(text) {
-        return "needs_input".to_string();
-    }
-    "normal".to_string()
+    SeverityRules::compiled_default().classify(text)
 }
 
 fn channels_for_severity(severity: &str) -> ChannelConfig {
