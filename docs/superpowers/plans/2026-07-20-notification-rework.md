@@ -517,7 +517,9 @@ git add native/rust/src/rules.rs native/rust/src/lib.rs
 git commit -m "native: load severity rules from severity-rules.json with closing-window classify"
 ```
 
----### Task 4: Rust `transcript.rs` — compaction-aware turn reading
+---
+
+### Task 4: Rust `transcript.rs` — compaction-aware turn reading
 
 Port Task 1's boundary semantics to Rust for the notify path: find the last turn boundary (real prompt or compact summary), extract the completed turn's final assistant text (skipping meta/sidechain entries), and flag compact-boundary and in-flight states.
 
