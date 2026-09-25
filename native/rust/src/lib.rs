@@ -16,9 +16,11 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wait_timeout::ChildExt;
 
+pub mod app_config;
 pub mod rules;
 pub mod transcript;
 
+use app_config::AppConfig;
 use rules::SeverityRules;
 
 const DEDUP_SECONDS: u64 = 20;
@@ -36,6 +38,7 @@ struct Paths {
     contexts_dir: PathBuf,
     dedup_dir: PathBuf,
     spool_dir: PathBuf,
+    cooldown_dir: PathBuf,
     active_index: PathBuf,
 }
 
@@ -53,6 +56,7 @@ impl Paths {
             contexts_dir: state_dir.join("contexts"),
             dedup_dir: state_dir.join("dedup"),
             spool_dir: state_dir.join("spool"),
+            cooldown_dir: state_dir.join("cooldown"),
             active_index: state_dir.join("active-notifications.json"),
             state_dir,
         }
@@ -63,6 +67,7 @@ impl Paths {
         fs::create_dir_all(&self.contexts_dir)?;
         fs::create_dir_all(&self.dedup_dir)?;
         fs::create_dir_all(&self.spool_dir)?;
+        fs::create_dir_all(&self.cooldown_dir)?;
         Ok(())
     }
 }
@@ -452,7 +457,9 @@ fn handle_notify_cli(
         return Ok(0);
     }
     let rules = SeverityRules::load();
-    let envelope = build_envelope_with(event, &rules);
+    let cfg = AppConfig::load();
+    let mut envelope = build_envelope_with(event, &rules);
+    envelope.channels = cfg.channels_for(&envelope.kind, &envelope.severity);
     let actionable = is_actionable(&envelope);
 
     if dry_run {
@@ -741,7 +748,7 @@ pub fn build_envelope_with(event: AgentEvent, rules: &SeverityRules) -> NotifyEn
     let key = event.dedup_key();
     let class = classify_event(&event, rules);
     let payload = build_payload(&event, &key, &class);
-    let channels = channels_for_severity(&class.severity);
+    let channels = AppConfig::compiled_default().channels_for(&class.kind, &class.severity);
     let group_key = notification_group_key(&event, &payload);
     let notification_id = notification_request_id(&group_key, &class.kind, &class.severity);
     NotifyEnvelope {
@@ -1033,15 +1040,6 @@ pub fn is_suppressed_turn(event: &AgentEvent) -> bool {
 /// here same as a routine turn completion.
 pub fn is_actionable(envelope: &NotifyEnvelope) -> bool {
     envelope.severity != "normal"
-}
-
-fn channels_for_severity(severity: &str) -> ChannelConfig {
-    ChannelConfig {
-        bell: true,
-        sound: true,
-        notify: true,
-        notify_ignore_dnd: severity == "error",
-    }
 }
 
 fn detect_mux() -> MuxContext {
@@ -1423,7 +1421,8 @@ fn handle_connection(
             notifier_status.lock().unwrap().connected = false;
         }
         WireMessage::Notify { envelope } => {
-            let outcome = process_notify(&paths, &notifier, &envelope)?;
+            let cooldown = AppConfig::load().cooldown_seconds;
+            let outcome = process_notify(&paths, &notifier, &envelope, cooldown)?;
             let mut stream = stream;
             send_json_line(
                 &mut stream,
@@ -1559,6 +1558,7 @@ fn process_notify(
     paths: &Paths,
     notifier: &Arc<Mutex<Option<UnixStream>>>,
     envelope: &NotifyEnvelope,
+    cooldown_seconds: u64,
 ) -> io::Result<NotifyOutcome> {
     if !envelope.channels.notify {
         return Ok(NotifyOutcome {
@@ -1588,6 +1588,17 @@ fn process_notify(
         });
     }
 
+    let silent = in_cooldown(paths, &envelope.group_key, &envelope.kind, cooldown_seconds)?;
+    let delivered_channels = if silent {
+        ChannelConfig {
+            bell: false,
+            sound: false,
+            ..envelope.channels
+        }
+    } else {
+        envelope.channels
+    };
+
     save_context(paths, envelope)?;
     update_active_index(paths, envelope)?;
 
@@ -1606,7 +1617,7 @@ fn process_notify(
             return Ok(NotifyOutcome {
                 status: "posted".to_string(),
                 message: "notification posted".to_string(),
-                channels: Some(envelope.channels),
+                channels: Some(delivered_channels),
                 notifier_connected: true,
             });
         }
@@ -1616,9 +1627,32 @@ fn process_notify(
     Ok(NotifyOutcome {
         status: "spooled".to_string(),
         message: "notifier write failed".to_string(),
-        channels: Some(envelope.channels),
+        channels: Some(delivered_channels),
         notifier_connected: false,
     })
+}
+
+/// Same pane + same kind inside the window → still post (the card replaces),
+/// but silence bell and sound so a chatty pane cannot re-ring every turn.
+fn in_cooldown(paths: &Paths, group_key: &str, kind: &str, window: u64) -> io::Result<bool> {
+    if window == 0 {
+        return Ok(false);
+    }
+    fs::create_dir_all(&paths.cooldown_dir)?;
+    let file = paths
+        .cooldown_dir
+        .join(sha256_hex(&format!("{group_key}:{kind}")));
+    let now = now_secs();
+    let mut hit = false;
+    if let Ok(text) = fs::read_to_string(&file) {
+        if let Ok(last) = text.trim().parse::<u64>() {
+            if now.saturating_sub(last) < window {
+                hit = true;
+            }
+        }
+    }
+    fs::write(file, now.to_string())?;
+    Ok(hit)
 }
 
 fn is_duplicate(paths: &Paths, key: &str) -> io::Result<bool> {
@@ -1734,7 +1768,7 @@ fn drain_spool(paths: &Paths, notifier: &Arc<Mutex<Option<UnixStream>>>) -> io::
             let _ = fs::remove_file(&path);
             continue;
         };
-        let outcome = process_notify(paths, notifier, &envelope)?;
+        let outcome = process_notify(paths, notifier, &envelope, 0)?;
         if outcome.status == "posted" || outcome.status == "duplicate" {
             let _ = fs::remove_file(&path);
         }
@@ -1783,6 +1817,7 @@ fn sweep_expired(paths: &Paths, dry_run: bool) -> io::Result<SweepReport> {
     let contexts_removed = remove_old_files(&paths.contexts_dir, cutoff, dry_run)?;
     let mut dedup_removed = remove_old_files(&paths.dedup_dir, cutoff, dry_run)?;
     dedup_removed += cap_files_by_count(&paths.dedup_dir, MAX_DEDUP_FILES, dry_run)?;
+    dedup_removed += remove_old_files(&paths.cooldown_dir, cutoff, dry_run)?;
     let spool_removed = remove_old_files(&paths.spool_dir, cutoff, dry_run)?;
     let legacy_root_removed = remove_old_legacy_state_files(paths, cutoff, dry_run)?;
     let mut active_removed = 0;
@@ -2769,6 +2804,21 @@ mod tests {
         let second = build_envelope(event);
 
         assert_ne!(first.group_key, second.group_key);
+    }
+
+    #[test]
+    fn cooldown_silences_repeat_posts_from_same_pane() {
+        let temp = tempdir().unwrap();
+        let paths = Paths::from_state_dir(temp.path().to_path_buf());
+        paths.ensure().unwrap();
+
+        assert!(!in_cooldown(&paths, "group-a", "turn", 45).unwrap());
+        assert!(in_cooldown(&paths, "group-a", "turn", 45).unwrap());
+        // Different kind or group is independent.
+        assert!(!in_cooldown(&paths, "group-a", "permission", 45).unwrap());
+        assert!(!in_cooldown(&paths, "group-b", "turn", 45).unwrap());
+        // Window 0 disables.
+        assert!(!in_cooldown(&paths, "group-a", "turn", 0).unwrap());
     }
 
     #[test]
