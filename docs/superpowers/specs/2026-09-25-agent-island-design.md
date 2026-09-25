@@ -629,7 +629,11 @@ Done by the agent, with Nathan's go-ahead:
 
 ## 14. Estimate and execution
 
-**Agent time.** Codex implements from this spec and Claude verifies adversarially (`codex-workflow-hybrid`).
+**Agent time.** Claude subagents implement from the plan:
+- **Sonnet** for well-specified tasks;
+- **Opus** for the Herdr client and feed, `InterruptPolicy`, and click-through and hover.
+
+Each task is verified by a different model than the one that implemented it. Codex was out of usage on 2026-09-25. Once it has capacity again, Codex can take over any task that hasn't started, with Claude verifying.
 
 | # | Item | Hours |
 |---|---|---|
